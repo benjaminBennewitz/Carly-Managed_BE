@@ -1,0 +1,19 @@
+# .gitignore
+.env
+.env.local
+.env.prod
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.sqlite3
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+media/
+staticfiles/
+.idea/
+.vscode/
+.DS_Store
