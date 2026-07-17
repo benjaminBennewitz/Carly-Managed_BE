@@ -1,0 +1,122 @@
+Carly-Managed_BE/
+├── apps/
+│   ├── accounts/
+│   │   ├── migrations/
+│   │   │   └── ...
+│   │   ├── tests/
+│   │   │   ├── __init__.py
+│   │   │   └── test_auth_api.py
+│   │   ├── __init__.py
+│   │   ├── admin.py
+│   │   ├── apps.py
+│   │   ├── authentication.py
+│   │   ├── managers.py
+│   │   ├── models.py
+│   │   ├── schema.py
+│   │   ├── serializers.py
+│   │   ├── services.py
+│   │   ├── urls.py
+│   │   ├── validators.py
+│   │   └── views.py
+│   ├── common/
+│   │   ├── __init__.py
+│   │   ├── apps.py
+│   │   ├── exceptions.py
+│   │   ├── models.py
+│   │   ├── pagination.py
+│   │   ├── throttles.py
+│   │   ├── urls.py
+│   │   ├── validators.py
+│   │   └── views.py
+│   ├── inbox/
+│   │   ├── migrations/
+│   │   │   └── ...
+│   │   ├── tests/
+│   │   │   ├── __init__.py
+│   │   │   └── test_inbox_api.py
+│   │   ├── __init__.py
+│   │   ├── admin.py
+│   │   ├── apps.py
+│   │   ├── models.py
+│   │   ├── serializers.py
+│   │   ├── services.py
+│   │   ├── urls.py
+│   │   └── views.py
+│   ├── preferences/
+│   │   ├── migrations/
+│   │   │   └── ...
+│   │   ├── tests/
+│   │   │   ├── __init__.py
+│   │   │   └── test_preferences_api.py
+│   │   ├── __init__.py
+│   │   ├── admin.py
+│   │   ├── apps.py
+│   │   ├── models.py
+│   │   ├── serializers.py
+│   │   ├── services.py
+│   │   ├── tasks.py
+│   │   ├── urls.py
+│   │   └── views.py
+│   ├── realtime/
+│   │   ├── tests/
+│   │   │   ├── __init__.py
+│   │   │   └── test_consumers.py
+│   │   ├── __init__.py
+│   │   ├── apps.py
+│   │   ├── consumers.py
+│   │   ├── events.py
+│   │   ├── rate_limit.py
+│   │   └── routing.py
+│   ├── workspaces/
+│   │   ├── migrations/
+│   │   │   └── ...
+│   │   ├── tests/
+│   │   │   ├── __init__.py
+│   │   │   ├── test_background_tasks.py
+│   │   │   └── test_workspace_api.py
+│   │   ├── __init__.py
+│   │   ├── admin.py
+│   │   ├── apps.py
+│   │   ├── choices.py
+│   │   ├── models.py
+│   │   ├── permissions.py
+│   │   ├── selectors.py
+│   │   ├── serializers.py
+│   │   ├── services.py
+│   │   ├── tasks.py
+│   │   ├── urls.py
+│   │   └── views.py
+│   └── __init__.py
+├── config/
+│   ├── settings/
+│   │   ├── __init__.py
+│   │   ├── base.py
+│   │   ├── development.py
+│   │   ├── production.py
+│   │   └── test.py
+│   ├── __init__.py
+│   ├── asgi.py
+│   ├── celery.py
+│   ├── environment.py
+│   ├── urls.py
+│   └── wsgi.py
+├── docs/
+│   ├── API_UEBERSICHT.md
+│   ├── ARCHITEKTUR.md
+│   ├── FRONTEND_INTEGRATION.md
+│   ├── make-tree.ps1
+│   ├── openapi.yml
+│   ├── QUALITAETSBERICHT.md
+│   └── SECURITY.md
+├── .editorconfig
+├── .env.local
+├── .env.prod
+├── .gitattributes
+├── .gitignore
+├── LICENSE.md
+├── manage.py
+├── README.md
+├── requirements.txt
+├── requirements-dev.txt
+├── tools.md
+└── tree.txt

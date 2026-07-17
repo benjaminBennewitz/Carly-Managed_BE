@@ -1,0 +1,4482 @@
+openapi: 3.0.3
+info:
+  title: Carly Managed API
+  version: 1.0.1
+  description: REST-API für Carly Managed mit Session-Authentifizierung und WebSockets.
+paths:
+  /api/v1/auth/csrf/:
+    get:
+      operationId: auth_csrf_retrieve
+      description: Liefert den Token zusätzlich für leichtes lokales Debugging.
+      tags:
+      - auth
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/auth/email/verify/confirm/:
+    post:
+      operationId: auth_email_verify_confirm_create
+      description: Markiert die Adresse nach erfolgreichem Tokenverbrauch als bestätigt.
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+        required: true
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUser'
+          description: ''
+  /api/v1/auth/email/verify/request/:
+    post:
+      operationId: auth_email_verify_request_create
+      description: Versendet nur bei noch nicht bestätigter Adresse eine Nachricht.
+      tags:
+      - auth
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/auth/login/:
+    post:
+      operationId: auth_login_create
+      description: Startet bei gültigen Zugangsdaten eine Sitzung.
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUser'
+          description: ''
+  /api/v1/auth/logout/:
+    post:
+      operationId: auth_logout_create
+      description: Löscht Sitzung und Authentifizierungsdaten.
+      tags:
+      - auth
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/auth/me/:
+    get:
+      operationId: auth_me_retrieve
+      description: Liefert den aktuellen Nutzer zur Sitzungswiederherstellung.
+      tags:
+      - auth
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUser'
+          description: ''
+    patch:
+      operationId: auth_me_partial_update
+      description: Aktualisiert ausschließlich freigegebene Profildaten.
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedCurrentUserRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedCurrentUserRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedCurrentUserRequest'
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUser'
+          description: ''
+  /api/v1/auth/password/change/:
+    post:
+      operationId: auth_password_change_create
+      description: Setzt ein neues Passwort und erhält nur die aktuelle Sitzung.
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordChangeRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PasswordChangeRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PasswordChangeRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/auth/password/reset/confirm/:
+    post:
+      operationId: auth_password_reset_confirm_create
+      description: Ändert das Passwort und hebt bestehende Sperren auf.
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirmRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirmRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirmRequest'
+        required: true
+      security:
+      - {}
+      responses:
+        '204':
+          description: No response body
+  /api/v1/auth/password/reset/request/:
+    post:
+      operationId: auth_password_reset_request_create
+      description: Antwortet unabhängig vom Kontobestand identisch.
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailOnlyRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EmailOnlyRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EmailOnlyRequest'
+        required: true
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/auth/register/:
+    post:
+      operationId: auth_register_create
+      description: Validiert und persistiert eine Registrierung atomar.
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegistrationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RegistrationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RegistrationRequest'
+        required: true
+      security:
+      - {}
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUser'
+          description: ''
+  /api/v1/inbox/conversations/:
+    get:
+      operationId: inbox_conversations_list
+      description: Verwaltet Gespräche ausschließlich für aktive Teilnehmende.
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Feld, das zum Sortieren der Ergebnisse verwendet werden soll.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: Eine Seitenzahl in der paginierten Ergebnismenge.
+        schema:
+          type: integer
+      - name: pageSize
+        required: false
+        in: query
+        description: Anzahl der pro Seite zurückzugebenden Ergebnisse.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: Ein Suchbegriff.
+        schema:
+          type: string
+      tags:
+      - inbox
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedConversationList'
+          description: ''
+    post:
+      operationId: inbox_conversations_create
+      description: Erstellt ein Gespräch in einem zugänglichen Workspace.
+      tags:
+      - inbox
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ConversationCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ConversationCreateRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationCreate'
+          description: ''
+  /api/v1/inbox/conversations/{id}/:
+    get:
+      operationId: inbox_conversations_retrieve
+      description: Liest das Gespräch und aktualisiert den persönlichen Lesestand.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der conversation identifiziert.
+        required: true
+      tags:
+      - inbox
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversation'
+          description: ''
+    delete:
+      operationId: inbox_conversations_destroy
+      description: Verlässt ein Gespräch, statt es für andere zu löschen.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der conversation identifiziert.
+        required: true
+      tags:
+      - inbox
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/inbox/conversations/{id}/messages/:
+    post:
+      operationId: inbox_conversations_messages_create
+      description: Sendet eine neue Nachricht in das Gespräch.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der conversation identifiziert.
+        required: true
+      tags:
+      - inbox
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ConversationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ConversationRequest'
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversation'
+          description: ''
+  /api/v1/inbox/conversations/{id}/participants/:
+    post:
+      operationId: inbox_conversations_participants_create
+      description: Fügt Teilnehmende hinzu oder entfernt sie unter Versionskontrolle.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der conversation identifiziert.
+        required: true
+      tags:
+      - inbox
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ConversationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ConversationRequest'
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversation'
+          description: ''
+    delete:
+      operationId: inbox_conversations_participants_destroy
+      description: Fügt Teilnehmende hinzu oder entfernt sie unter Versionskontrolle.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der conversation identifiziert.
+        required: true
+      tags:
+      - inbox
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/inbox/notifications/:
+    get:
+      operationId: inbox_notifications_list
+      description: Listet, liest und entfernt persönliche Systembenachrichtigungen.
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Feld, das zum Sortieren der Ergebnisse verwendet werden soll.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: Eine Seitenzahl in der paginierten Ergebnismenge.
+        schema:
+          type: integer
+      - name: pageSize
+        required: false
+        in: query
+        description: Anzahl der pro Seite zurückzugebenden Ergebnisse.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: Ein Suchbegriff.
+        schema:
+          type: string
+      tags:
+      - inbox
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSystemNotificationList'
+          description: ''
+  /api/v1/inbox/notifications/{id}/:
+    get:
+      operationId: inbox_notifications_retrieve
+      description: Listet, liest und entfernt persönliche Systembenachrichtigungen.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der system notification identifiziert.
+        required: true
+      tags:
+      - inbox
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemNotification'
+          description: ''
+    delete:
+      operationId: inbox_notifications_destroy
+      description: Listet, liest und entfernt persönliche Systembenachrichtigungen.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der system notification identifiziert.
+        required: true
+      tags:
+      - inbox
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/inbox/notifications/{id}/mark-read/:
+    post:
+      operationId: inbox_notifications_mark_read_create
+      description: Markiert eine Benachrichtigung als gelesen.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der system notification identifiziert.
+        required: true
+      tags:
+      - inbox
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SystemNotificationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SystemNotificationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SystemNotificationRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemNotification'
+          description: ''
+  /api/v1/inbox/notifications/clear/:
+    delete:
+      operationId: inbox_notifications_clear_destroy
+      description: Löscht alle persönlichen Systembenachrichtigungen.
+      tags:
+      - inbox
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/inbox/notifications/mark-all-read/:
+    post:
+      operationId: inbox_notifications_mark_all_read_create
+      description: Markiert alle offenen Benachrichtigungen als gelesen.
+      tags:
+      - inbox
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SystemNotificationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SystemNotificationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SystemNotificationRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemNotification'
+          description: ''
+  /api/v1/preferences/carly/:
+    get:
+      operationId: preferences_carly_retrieve
+      description: Liefert Einstellungen und Fortschritt.
+      tags:
+      - preferences
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CarlyState'
+          description: ''
+    patch:
+      operationId: preferences_carly_partial_update
+      description: Ändert ausschließlich freigegebene Carly-Einstellungen.
+      tags:
+      - preferences
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedCarlySettingsWriteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedCarlySettingsWriteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedCarlySettingsWriteRequest'
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CarlyState'
+          description: ''
+    delete:
+      operationId: preferences_carly_destroy
+      description: Setzt Carly zurück, ohne andere Kontodaten zu verändern.
+      tags:
+      - preferences
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CarlyState'
+          description: ''
+  /api/v1/preferences/carly/actions/{action}/:
+    post:
+      operationId: preferences_carly_actions_create
+      description: Validiert Parameter, Cooldown, Tageslimit und Versionsstand.
+      parameters:
+      - in: path
+        name: action
+        schema:
+          type: string
+        required: true
+      tags:
+      - preferences
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CarlyActionRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CarlyActionRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CarlyActionRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CarlyState'
+          description: ''
+  /api/v1/preferences/settings/:
+    get:
+      operationId: preferences_settings_retrieve
+      description: Liefert den vollständigen Einstellungszustand.
+      tags:
+      - preferences
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppSettings'
+          description: ''
+    patch:
+      operationId: preferences_settings_partial_update
+      description: Aktualisiert partielle verschachtelte Einstellungen.
+      tags:
+      - preferences
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedAppSettingsWriteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedAppSettingsWriteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedAppSettingsWriteRequest'
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppSettings'
+          description: ''
+    delete:
+      operationId: preferences_settings_destroy
+      description: Setzt die Einstellungen atomar auf sichere Standardwerte zurück.
+      tags:
+      - preferences
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppSettings'
+          description: ''
+  /api/v1/workspaces/:
+    get:
+      operationId: workspaces_list
+      description: Liest zugängliche Workspaces und verwaltet deren Mitglieder.
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Feld, das zum Sortieren der Ergebnisse verwendet werden soll.
+        schema:
+          type: string
+      - name: search
+        required: false
+        in: query
+        description: Ein Suchbegriff.
+        schema:
+          type: string
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Workspace'
+          description: ''
+  /api/v1/workspaces/{id}/:
+    get:
+      operationId: workspaces_retrieve
+      description: Liest zugängliche Workspaces und verwaltet deren Mitglieder.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der workspace identifiziert.
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workspace'
+          description: ''
+  /api/v1/workspaces/{id}/members/:
+    get:
+      operationId: workspaces_members_retrieve
+      description: Listet Mitglieder oder ändert Rolle und Avatarfarbe eines Mitglieds.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der workspace identifiziert.
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workspace'
+          description: ''
+    patch:
+      operationId: workspaces_members_partial_update
+      description: Listet Mitglieder oder ändert Rolle und Avatarfarbe eines Mitglieds.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der workspace identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedWorkspaceRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedWorkspaceRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedWorkspaceRequest'
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workspace'
+          description: ''
+  /api/v1/workspaces/attachments/{attachment_id}/download/:
+    get:
+      operationId: workspaces_attachments_download_retrieve
+      description: Streamt die Datei mit sicherem Content-Disposition-Header.
+      parameters:
+      - in: path
+        name: attachment_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: string
+                format: binary
+          description: ''
+  /api/v1/workspaces/automations/:
+    get:
+      operationId: workspaces_automations_list
+      description: Verwaltet begrenzte serverseitige Board-Automationen.
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Feld, das zum Sortieren der Ergebnisse verwendet werden soll.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: Eine Seitenzahl in der paginierten Ergebnismenge.
+        schema:
+          type: integer
+      - name: pageSize
+        required: false
+        in: query
+        description: Anzahl der pro Seite zurückzugebenden Ergebnisse.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: Ein Suchbegriff.
+        schema:
+          type: string
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAutomationRuleList'
+          description: ''
+    post:
+      operationId: workspaces_automations_create
+      description: Verwaltet begrenzte serverseitige Board-Automationen.
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AutomationRuleRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AutomationRuleRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AutomationRuleRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationRule'
+          description: ''
+  /api/v1/workspaces/automations/{id}/:
+    get:
+      operationId: workspaces_automations_retrieve
+      description: Verwaltet begrenzte serverseitige Board-Automationen.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der automation rule identifiziert.
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationRule'
+          description: ''
+    patch:
+      operationId: workspaces_automations_partial_update
+      description: Aktualisiert eine Regel mit Versionsprüfung.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der automation rule identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedAutomationRuleRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedAutomationRuleRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedAutomationRuleRequest'
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationRule'
+          description: ''
+    delete:
+      operationId: workspaces_automations_destroy
+      description: Löscht eine Regel nach Versionsprüfung.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der automation rule identifiziert.
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/workspaces/boards/:
+    get:
+      operationId: workspaces_boards_list
+      description: Liefert zugängliche Boards als vollständige Snapshots.
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Feld, das zum Sortieren der Ergebnisse verwendet werden soll.
+        schema:
+          type: string
+      - name: search
+        required: false
+        in: query
+        description: Ein Suchbegriff.
+        schema:
+          type: string
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Board'
+          description: ''
+  /api/v1/workspaces/boards/{id}/:
+    get:
+      operationId: workspaces_boards_retrieve
+      description: Liefert zugängliche Boards als vollständige Snapshots.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der board identifiziert.
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Board'
+          description: ''
+  /api/v1/workspaces/boards/{id}/columns/:
+    post:
+      operationId: workspaces_boards_columns_create
+      description: Erstellt eine neue Boardspalte am Ende.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der board identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BoardRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/BoardRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/BoardRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Board'
+          description: ''
+  /api/v1/workspaces/boards/{id}/reorder-columns/:
+    post:
+      operationId: workspaces_boards_reorder_columns_create
+      description: Speichert eine vollständige Spaltenreihenfolge atomar.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der board identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BoardRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/BoardRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/BoardRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Board'
+          description: ''
+  /api/v1/workspaces/columns/{id}/:
+    put:
+      operationId: workspaces_columns_update
+      description: Ändert oder löscht einzelne Boardspalten.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der board column identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BoardColumnWriteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/BoardColumnWriteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/BoardColumnWriteRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoardColumnWrite'
+          description: ''
+    patch:
+      operationId: workspaces_columns_partial_update
+      description: Aktualisiert eine Spalte unter Versionskontrolle.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der board column identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedBoardColumnWriteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedBoardColumnWriteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedBoardColumnWriteRequest'
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoardColumnWrite'
+          description: ''
+    delete:
+      operationId: workspaces_columns_destroy
+      description: Löscht eine leere, nicht reservierte Spalte.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der board column identifiziert.
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/workspaces/dashboard/:
+    get:
+      operationId: workspaces_dashboard_retrieve
+      description: Liefert kompakte Task-, Projekt- und Fälligkeitswerte.
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/workspaces/invitations/:
+    get:
+      operationId: workspaces_invitations_list
+      description: Verwaltet Einladungen ohne Klartext-Token-Persistenz.
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Feld, das zum Sortieren der Ergebnisse verwendet werden soll.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: Eine Seitenzahl in der paginierten Ergebnismenge.
+        schema:
+          type: integer
+      - name: pageSize
+        required: false
+        in: query
+        description: Anzahl der pro Seite zurückzugebenden Ergebnisse.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: Ein Suchbegriff.
+        schema:
+          type: string
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedInvitationList'
+          description: ''
+    post:
+      operationId: workspaces_invitations_create
+      description: Erstellt und versendet eine Einladung.
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvitationCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/InvitationCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/InvitationCreateRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationCreate'
+          description: ''
+  /api/v1/workspaces/invitations/{id}/:
+    delete:
+      operationId: workspaces_invitations_destroy
+      description: Widerruft eine offene Einladung statt sie spurlos zu löschen.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der workspace invitation identifiziert.
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/workspaces/invitations/accept/:
+    post:
+      operationId: workspaces_invitations_accept_create
+      description: Nimmt eine Einladung für die angemeldete E-Mail-Adresse an.
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvitationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/InvitationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/InvitationRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invitation'
+          description: ''
+  /api/v1/workspaces/join-requests/:
+    get:
+      operationId: workspaces_join_requests_list
+      description: Listet und moderiert Workspace-Beitrittsanfragen.
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Feld, das zum Sortieren der Ergebnisse verwendet werden soll.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: Eine Seitenzahl in der paginierten Ergebnismenge.
+        schema:
+          type: integer
+      - name: pageSize
+        required: false
+        in: query
+        description: Anzahl der pro Seite zurückzugebenden Ergebnisse.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: Ein Suchbegriff.
+        schema:
+          type: string
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedJoinRequestList'
+          description: ''
+  /api/v1/workspaces/join-requests/{id}/:
+    get:
+      operationId: workspaces_join_requests_retrieve
+      description: Listet und moderiert Workspace-Beitrittsanfragen.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der workspace join request identifiziert.
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JoinRequest'
+          description: ''
+  /api/v1/workspaces/join-requests/{id}/approve/:
+    post:
+      operationId: workspaces_join_requests_approve_create
+      description: Genehmigt eine Beitrittsanfrage.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der workspace join request identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JoinRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/JoinRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/JoinRequestRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JoinRequest'
+          description: ''
+  /api/v1/workspaces/join-requests/{id}/reject/:
+    post:
+      operationId: workspaces_join_requests_reject_create
+      description: Lehnt eine Beitrittsanfrage ab.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der workspace join request identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JoinRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/JoinRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/JoinRequestRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JoinRequest'
+          description: ''
+  /api/v1/workspaces/projects/:
+    get:
+      operationId: workspaces_projects_list
+      description: Verwaltet Projekte samt Rollen und Lebenszyklus.
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Feld, das zum Sortieren der Ergebnisse verwendet werden soll.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: Eine Seitenzahl in der paginierten Ergebnismenge.
+        schema:
+          type: integer
+      - name: pageSize
+        required: false
+        in: query
+        description: Anzahl der pro Seite zurückzugebenden Ergebnisse.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: Ein Suchbegriff.
+        schema:
+          type: string
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedProjectList'
+          description: ''
+    post:
+      operationId: workspaces_projects_create
+      description: Erstellt ein Projekt nur mit Workspace-Verwaltungsrechten.
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectWriteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ProjectWriteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ProjectWriteRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectWrite'
+          description: ''
+  /api/v1/workspaces/projects/{id}/:
+    get:
+      operationId: workspaces_projects_retrieve
+      description: Verwaltet Projekte samt Rollen und Lebenszyklus.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der project identifiziert.
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+          description: ''
+    patch:
+      operationId: workspaces_projects_partial_update
+      description: Aktualisiert ein Projekt mit optimistischer Sperre.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der project identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedProjectWriteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedProjectWriteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedProjectWriteRequest'
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectWrite'
+          description: ''
+    delete:
+      operationId: workspaces_projects_destroy
+      description: Löscht ein Projekt nur nach expliziter aktueller Versionsangabe.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der project identifiziert.
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/workspaces/projects/{id}/archive/:
+    post:
+      operationId: workspaces_projects_archive_create
+      description: Archiviert ein Projekt.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der project identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+          description: ''
+  /api/v1/workspaces/projects/{id}/complete/:
+    post:
+      operationId: workspaces_projects_complete_create
+      description: Schließt ein Projekt ab.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der project identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+          description: ''
+  /api/v1/workspaces/projects/{id}/mark-opened/:
+    post:
+      operationId: workspaces_projects_mark_opened_create
+      description: Aktualisiert den letzten nutzerspezifischen Projektaufruf.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der project identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+          description: ''
+  /api/v1/workspaces/projects/{id}/pin/:
+    post:
+      operationId: workspaces_projects_pin_create
+      description: Speichert den Pin-Zustand nutzerspezifisch.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der project identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+          description: ''
+  /api/v1/workspaces/projects/{id}/restore/:
+    post:
+      operationId: workspaces_projects_restore_create
+      description: Stellt ein Projekt als aktiv wieder her.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der project identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ProjectRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+          description: ''
+  /api/v1/workspaces/search/:
+    get:
+      operationId: workspaces_search_retrieve
+      description: Liefert begrenzte, gruppierte Suchtreffer ohne Fremddatenleck.
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/workspaces/tasks/:
+    get:
+      operationId: workspaces_tasks_list
+      description: Verwaltet Tasks, Unteraufgaben, Kommentare, Dateien und Wiederholungen.
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Feld, das zum Sortieren der Ergebnisse verwendet werden soll.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: Eine Seitenzahl in der paginierten Ergebnismenge.
+        schema:
+          type: integer
+      - name: pageSize
+        required: false
+        in: query
+        description: Anzahl der pro Seite zurückzugebenden Ergebnisse.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: Ein Suchbegriff.
+        schema:
+          type: string
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedTaskList'
+          description: ''
+    post:
+      operationId: workspaces_tasks_create
+      description: Erstellt einen Task innerhalb eines zugänglichen Boards.
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskWriteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TaskWriteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TaskWriteRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskWrite'
+          description: ''
+  /api/v1/workspaces/tasks/{id}/:
+    get:
+      operationId: workspaces_tasks_retrieve
+      description: Verwaltet Tasks, Unteraufgaben, Kommentare, Dateien und Wiederholungen.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der task identifiziert.
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+          description: ''
+    patch:
+      operationId: workspaces_tasks_partial_update
+      description: Aktualisiert einen Task mit Konflikterkennung.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der task identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedTaskWriteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedTaskWriteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedTaskWriteRequest'
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskWrite'
+          description: ''
+    delete:
+      operationId: workspaces_tasks_destroy
+      description: Löscht einen Task erst nach aktueller Versionsprüfung dauerhaft.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der task identifiziert.
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/workspaces/tasks/{id}/archive/:
+    post:
+      operationId: workspaces_tasks_archive_create
+      description: Archiviert einen Task.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der task identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+          description: ''
+  /api/v1/workspaces/tasks/{id}/attachments/:
+    post:
+      operationId: workspaces_tasks_attachments_create
+      description: Speichert einen oder mehrere geprüfte private Anhänge.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der task identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+          description: ''
+  /api/v1/workspaces/tasks/{id}/comments/:
+    post:
+      operationId: workspaces_tasks_comments_create
+      description: Erstellt einen Kommentar oder löscht den eigenen Kommentar weich.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der task identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+          description: ''
+    delete:
+      operationId: workspaces_tasks_comments_destroy
+      description: Erstellt einen Kommentar oder löscht den eigenen Kommentar weich.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der task identifiziert.
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/workspaces/tasks/{id}/complete/:
+    post:
+      operationId: workspaces_tasks_complete_create
+      description: Schließt einen Task ab.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der task identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+          description: ''
+  /api/v1/workspaces/tasks/{id}/move/:
+    post:
+      operationId: workspaces_tasks_move_create
+      description: Verschiebt einen Task in eine Zielspalte und Position.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der task identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+          description: ''
+  /api/v1/workspaces/tasks/{id}/recurrence/:
+    get:
+      operationId: workspaces_tasks_recurrence_retrieve
+      description: Liest, speichert oder entfernt die Wiederholung eines Tasks.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der task identifiziert.
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+          description: ''
+    delete:
+      operationId: workspaces_tasks_recurrence_destroy
+      description: Liest, speichert oder entfernt die Wiederholung eines Tasks.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der task identifiziert.
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/workspaces/tasks/{id}/reopen/:
+    post:
+      operationId: workspaces_tasks_reopen_create
+      description: Öffnet einen Task erneut.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der task identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+          description: ''
+  /api/v1/workspaces/tasks/{id}/restore/:
+    post:
+      operationId: workspaces_tasks_restore_create
+      description: Stellt einen Task wieder her.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der task identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+          description: ''
+  /api/v1/workspaces/tasks/{id}/subtasks/:
+    post:
+      operationId: workspaces_tasks_subtasks_create
+      description: Erstellt, ändert oder löscht eine Unteraufgabe.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der task identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+        required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+          description: ''
+    patch:
+      operationId: workspaces_tasks_subtasks_partial_update
+      description: Erstellt, ändert oder löscht eine Unteraufgabe.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der task identifiziert.
+        required: true
+      tags:
+      - workspaces
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedTaskRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedTaskRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedTaskRequest'
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+          description: ''
+    delete:
+      operationId: workspaces_tasks_subtasks_destroy
+      description: Erstellt, ändert oder löscht eine Unteraufgabe.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der task identifiziert.
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: No response body
+components:
+  schemas:
+    AccessibilitySettingsRequest:
+      type: object
+      description: Validiert alle barrierebezogenen Einstellungen.
+      properties:
+        colorVisionMode:
+          $ref: '#/components/schemas/ColorVisionModeEnum'
+        neuroMode:
+          type: boolean
+        reduceMotion:
+          type: boolean
+        reduceHover:
+          type: boolean
+        magnifier:
+          type: boolean
+        fontSize:
+          $ref: '#/components/schemas/FontSizeEnum'
+        highContrast:
+          type: boolean
+    AppSettings:
+      type: object
+      description: Entspricht dem AppSettings-Interface des Angular-Frontends.
+      properties:
+        accessibility:
+          type: object
+          additionalProperties: {}
+          description: Bündelt persistierte Barrierefreiheitsfelder.
+          readOnly: true
+        general:
+          type: object
+          additionalProperties: {}
+          description: Bündelt allgemeine Einstellungen und Alarmkategorien.
+          readOnly: true
+        tools:
+          type: object
+          additionalProperties: {}
+          description: Bündelt optionale Werkzeugzustände.
+          readOnly: true
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - accessibility
+      - general
+      - tools
+    Attachment:
+      type: object
+      description: Gibt nur Metadaten und eine geschützte Download-URL aus.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        fileName:
+          type: string
+        mimeType:
+          type: string
+        sizeBytes:
+          type: integer
+        uploadedBy:
+          type: object
+          additionalProperties: {}
+          nullable: true
+          description: Liefert den hochladenden Nutzer.
+          readOnly: true
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+        downloadUrl:
+          type: string
+          description: Erzeugt eine API-URL, die erneut Berechtigungen prüft.
+          readOnly: true
+      required:
+      - createdAt
+      - downloadUrl
+      - fileName
+      - id
+      - mimeType
+      - sizeBytes
+      - uploadedBy
+    AttachmentRequest:
+      type: object
+      description: Gibt nur Metadaten und eine geschützte Download-URL aus.
+      properties:
+        fileName:
+          type: string
+          minLength: 1
+        mimeType:
+          type: string
+          minLength: 1
+        sizeBytes:
+          type: integer
+      required:
+      - fileName
+      - mimeType
+      - sizeBytes
+    AutomationRule:
+      type: object
+      description: Entspricht dem WorkspaceAutomationRule-Interface.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        boardId:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          maxLength: 120
+          minLength: 2
+        trigger:
+          $ref: '#/components/schemas/TriggerEnum'
+        conditions: {}
+        actions: {}
+        isActive:
+          type: boolean
+        sortOrder:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+        updatedAt:
+          type: string
+          format: date-time
+          readOnly: true
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - boardId
+      - createdAt
+      - id
+      - isActive
+      - name
+      - sortOrder
+      - trigger
+      - updatedAt
+    AutomationRuleRequest:
+      type: object
+      description: Entspricht dem WorkspaceAutomationRule-Interface.
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 120
+        trigger:
+          $ref: '#/components/schemas/TriggerEnum'
+        conditions: {}
+        actions: {}
+        isActive:
+          type: boolean
+        sortOrder:
+          type: integer
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - isActive
+      - name
+      - sortOrder
+      - trigger
+    BlankEnum:
+      enum:
+      - ''
+    Board:
+      type: object
+      description: Liefert ein Board als geordneten Spalten-Snapshot.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        title:
+          type: string
+          maxLength: 120
+        kind:
+          $ref: '#/components/schemas/BoardKindEnum'
+        projectId:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        columns:
+          type: array
+          items:
+            $ref: '#/components/schemas/BoardColumn'
+          readOnly: true
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - columns
+      - id
+      - kind
+      - projectId
+      - title
+      - updated_at
+    BoardColumn:
+      type: object
+      description: Gibt Spalten mit vollständig serialisierten Tasks aus.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        title:
+          type: string
+          maxLength: 80
+          minLength: 1
+        color:
+          type: string
+          maxLength: 7
+        tasks:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          description: Liefert nicht archivierte Tasks in gespeicherter Reihenfolge.
+          readOnly: true
+        isFixedPosition:
+          type: boolean
+        sortMode:
+          type: string
+          nullable: true
+          description: Wandelt den leeren Datenbankwert in null um.
+          readOnly: true
+        isDynamic:
+          type: boolean
+        systemRole:
+          type: string
+          nullable: true
+          description: Wandelt den leeren Datenbankwert in null um.
+          readOnly: true
+        position:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - id
+      - isDynamic
+      - isFixedPosition
+      - sortMode
+      - systemRole
+      - tasks
+      - title
+    BoardColumnRequest:
+      type: object
+      description: Gibt Spalten mit vollständig serialisierten Tasks aus.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 80
+        color:
+          type: string
+          minLength: 1
+          maxLength: 7
+        isFixedPosition:
+          type: boolean
+        isDynamic:
+          type: boolean
+        position:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - isDynamic
+      - isFixedPosition
+      - title
+    BoardColumnWrite:
+      type: object
+      description: Validiert bearbeitbare Spaltenfelder und die Versionsnummer.
+      properties:
+        title:
+          type: string
+          maxLength: 80
+          minLength: 1
+        color:
+          type: string
+          maxLength: 7
+        sortMode:
+          oneOf:
+          - $ref: '#/components/schemas/SortModeEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - title
+    BoardColumnWriteRequest:
+      type: object
+      description: Validiert bearbeitbare Spaltenfelder und die Versionsnummer.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 80
+        color:
+          type: string
+          minLength: 1
+          maxLength: 7
+        sortMode:
+          oneOf:
+          - $ref: '#/components/schemas/SortModeEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - title
+    BoardKindEnum:
+      enum:
+      - personal
+      - project
+      type: string
+      description: |-
+        * `personal` - Persönlich
+        * `project` - Projekt
+    BoardRequest:
+      type: object
+      description: Liefert ein Board als geordneten Spalten-Snapshot.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        kind:
+          $ref: '#/components/schemas/BoardKindEnum'
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - kind
+      - title
+    CarlyActionRequest:
+      type: object
+      description: Validiert optionale Aktionsparameter.
+      properties:
+        food:
+          $ref: '#/components/schemas/FoodEnum'
+        version:
+          type: integer
+          minimum: 1
+      required:
+      - version
+    CarlyState:
+      type: object
+      description: Entspricht dem CarlyState-Interface des Frontends.
+      properties:
+        settings:
+          type: object
+          additionalProperties: {}
+          description: Bündelt die optionalen Carly-Funktionen.
+          readOnly: true
+        progress:
+          type: object
+          additionalProperties: {}
+          description: Gibt serverkontrollierte Fortschrittswerte aus.
+          readOnly: true
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - progress
+      - settings
+    ColorVisionModeEnum:
+      enum:
+      - standard
+      - protanopia
+      - deuteranopia
+      - tritanopia
+      - monochrome
+      type: string
+      description: |-
+        * `standard` - standard
+        * `protanopia` - protanopia
+        * `deuteranopia` - deuteranopia
+        * `tritanopia` - tritanopia
+        * `monochrome` - monochrome
+    Conversation:
+      type: object
+      description: Entspricht dem WorkspaceConversation-Interface.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        participants:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          description: Liefert aktive Gesprächsteilnehmende.
+          readOnly: true
+        messages:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          description: Filtert gelöschte Nachrichten aus.
+          readOnly: true
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+        updatedAt:
+          type: string
+          format: date-time
+          readOnly: true
+        unreadCount:
+          type: integer
+          description: Zählt Nachrichten nach dem persönlichen Lesestand.
+          readOnly: true
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - createdAt
+      - id
+      - messages
+      - participants
+      - unreadCount
+      - updatedAt
+    ConversationCreate:
+      type: object
+      description: Validiert neue Gespräche und die erste Nachricht.
+      properties:
+        workspaceId:
+          type: string
+          format: uuid
+        participantIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        subject:
+          type: string
+          maxLength: 160
+          minLength: 1
+        body:
+          type: string
+          maxLength: 5000
+          minLength: 1
+      required:
+      - body
+      - participantIds
+      - subject
+      - workspaceId
+    ConversationCreateRequest:
+      type: object
+      description: Validiert neue Gespräche und die erste Nachricht.
+      properties:
+        workspaceId:
+          type: string
+          format: uuid
+        participantIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        subject:
+          type: string
+          minLength: 1
+          maxLength: 160
+        body:
+          type: string
+          minLength: 1
+          maxLength: 5000
+      required:
+      - body
+      - participantIds
+      - subject
+      - workspaceId
+    ConversationRequest:
+      type: object
+      description: Entspricht dem WorkspaceConversation-Interface.
+      properties:
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+    CurrentUser:
+      type: object
+      description: Gibt ausschließlich die für das Frontend notwendigen Kontodaten
+        aus.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        displayName:
+          type: string
+        email:
+          type: string
+          format: email
+          readOnly: true
+        emailVerified:
+          type: boolean
+          readOnly: true
+        avatarUrl:
+          type: string
+          nullable: true
+          description: Erzeugt bei vorhandenem Avatar eine absolute URL.
+          readOnly: true
+      required:
+      - avatarUrl
+      - displayName
+      - email
+      - emailVerified
+      - id
+    EmailOnlyRequest:
+      type: object
+      description: Validiert eine einzelne E-Mail-Adresse für Wiederherstellungen.
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+          maxLength: 254
+      required:
+      - email
+    FontSizeEnum:
+      enum:
+      - normal
+      - large
+      - xlarge
+      type: string
+      description: |-
+        * `normal` - normal
+        * `large` - large
+        * `xlarge` - xlarge
+    FoodEnum:
+      enum:
+      - fish
+      - berry
+      - cookie
+      - potion
+      type: string
+      description: |-
+        * `fish` - fish
+        * `berry` - berry
+        * `cookie` - cookie
+        * `potion` - potion
+    GeneralSettingsRequest:
+      type: object
+      description: Validiert allgemeines Workspace-Verhalten.
+      properties:
+        dynamicNewColumns:
+          type: boolean
+        tooltipsEnabled:
+          type: boolean
+        allowInvites:
+          type: boolean
+        hideRealName:
+          type: boolean
+        realName:
+          type: string
+          maxLength: 60
+        nickname:
+          type: string
+          maxLength: 60
+        alarms:
+          type: object
+          additionalProperties:
+            type: boolean
+    History:
+      type: object
+      description: Gibt nachvollziehbare Task-Aktivitäten aus.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        actor:
+          type: object
+          additionalProperties: {}
+          nullable: true
+          description: Liefert die ausführende Person.
+          readOnly: true
+        action:
+          type: string
+          maxLength: 300
+        icon:
+          type: string
+          maxLength: 50
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+        metadata: {}
+      required:
+      - action
+      - actor
+      - createdAt
+      - icon
+      - id
+    HistoryRequest:
+      type: object
+      description: Gibt nachvollziehbare Task-Aktivitäten aus.
+      properties:
+        action:
+          type: string
+          minLength: 1
+          maxLength: 300
+        icon:
+          type: string
+          minLength: 1
+          maxLength: 50
+        metadata: {}
+      required:
+      - action
+      - icon
+    Invitation:
+      type: object
+      description: Gibt Einladungsmetadaten ohne Token-Hash aus.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        fullName:
+          type: string
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        projectId:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        invitedById:
+          type: string
+          format: uuid
+          readOnly: true
+        status:
+          $ref: '#/components/schemas/InvitationStatusEnum'
+        expiresAt:
+          type: string
+          format: date-time
+          readOnly: true
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - createdAt
+      - email
+      - expiresAt
+      - fullName
+      - id
+      - invitedById
+      - projectId
+    InvitationCreate:
+      type: object
+      description: Validiert eine Einladung für Workspace oder Projekt.
+      properties:
+        fullName:
+          type: string
+          maxLength: 60
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        projectId:
+          type: string
+          format: uuid
+          nullable: true
+      required:
+      - email
+    InvitationCreateRequest:
+      type: object
+      description: Validiert eine Einladung für Workspace oder Projekt.
+      properties:
+        fullName:
+          type: string
+          maxLength: 60
+        email:
+          type: string
+          format: email
+          minLength: 1
+          maxLength: 254
+        projectId:
+          type: string
+          format: uuid
+          nullable: true
+      required:
+      - email
+    InvitationRequest:
+      type: object
+      description: Gibt Einladungsmetadaten ohne Token-Hash aus.
+      properties:
+        fullName:
+          type: string
+          minLength: 1
+        email:
+          type: string
+          format: email
+          minLength: 1
+          maxLength: 254
+        status:
+          $ref: '#/components/schemas/InvitationStatusEnum'
+      required:
+      - email
+      - fullName
+    InvitationStatusEnum:
+      enum:
+      - pending
+      - accepted
+      - revoked
+      - expired
+      type: string
+      description: |-
+        * `pending` - Offen
+        * `accepted` - Angenommen
+        * `revoked` - Widerrufen
+        * `expired` - Abgelaufen
+    JoinRequest:
+      type: object
+      description: Entspricht der Frontenddarstellung einer Beitrittsanfrage.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        fullName:
+          type: string
+          readOnly: true
+        email:
+          type: string
+          format: email
+          readOnly: true
+        avatarColor:
+          type: string
+        requestedAt:
+          type: string
+          format: date-time
+          readOnly: true
+        status:
+          $ref: '#/components/schemas/JoinRequestStatusEnum'
+      required:
+      - avatarColor
+      - email
+      - fullName
+      - id
+      - requestedAt
+    JoinRequestRequest:
+      type: object
+      description: Entspricht der Frontenddarstellung einer Beitrittsanfrage.
+      properties:
+        avatarColor:
+          type: string
+          minLength: 1
+        status:
+          $ref: '#/components/schemas/JoinRequestStatusEnum'
+      required:
+      - avatarColor
+    JoinRequestStatusEnum:
+      enum:
+      - pending
+      - approved
+      - rejected
+      type: string
+      description: |-
+        * `pending` - Offen
+        * `approved` - Genehmigt
+        * `rejected` - Abgelehnt
+    LoginRequest:
+      type: object
+      description: Begrenzt die Größe sämtlicher Anmeldedaten.
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+          maxLength: 254
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+          maxLength: 128
+        rememberMe:
+          type: boolean
+          default: false
+      required:
+      - email
+      - password
+    PaginatedAutomationRuleList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AutomationRule'
+    PaginatedConversationList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Conversation'
+    PaginatedInvitationList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Invitation'
+    PaginatedJoinRequestList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/JoinRequest'
+    PaginatedProjectList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Project'
+    PaginatedSystemNotificationList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SystemNotification'
+    PaginatedTaskList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Task'
+    PasswordChangeRequest:
+      type: object
+      description: Validiert einen authentifizierten Passwortwechsel.
+      properties:
+        currentPassword:
+          type: string
+          writeOnly: true
+          minLength: 1
+          maxLength: 128
+        newPassword:
+          type: string
+          writeOnly: true
+          minLength: 12
+          maxLength: 128
+      required:
+      - currentPassword
+      - newPassword
+    PasswordResetConfirmRequest:
+      type: object
+      description: Kombiniert ein Einmal-Token mit einem neuen sicheren Passwort.
+      properties:
+        token:
+          type: string
+          minLength: 32
+          maxLength: 256
+        newPassword:
+          type: string
+          writeOnly: true
+          minLength: 12
+          maxLength: 128
+      required:
+      - newPassword
+      - token
+    PatchedAppSettingsWriteRequest:
+      type: object
+      description: Validiert partielle verschachtelte Einstellungsänderungen.
+      properties:
+        accessibility:
+          $ref: '#/components/schemas/AccessibilitySettingsRequest'
+        general:
+          $ref: '#/components/schemas/GeneralSettingsRequest'
+        tools:
+          $ref: '#/components/schemas/ToolSettingsRequest'
+        version:
+          type: integer
+          minimum: 1
+    PatchedAutomationRuleRequest:
+      type: object
+      description: Entspricht dem WorkspaceAutomationRule-Interface.
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 120
+        trigger:
+          $ref: '#/components/schemas/TriggerEnum'
+        conditions: {}
+        actions: {}
+        isActive:
+          type: boolean
+        sortOrder:
+          type: integer
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+    PatchedBoardColumnWriteRequest:
+      type: object
+      description: Validiert bearbeitbare Spaltenfelder und die Versionsnummer.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 80
+        color:
+          type: string
+          minLength: 1
+          maxLength: 7
+        sortMode:
+          oneOf:
+          - $ref: '#/components/schemas/SortModeEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+    PatchedCarlySettingsWriteRequest:
+      type: object
+      description: Validiert ausschließlich nutzersteuerbare Carly-Einstellungen.
+      properties:
+        enabled:
+          type: boolean
+        showGlobally:
+          type: boolean
+        messagesEnabled:
+          type: boolean
+        taskReactionsEnabled:
+          type: boolean
+        autoSleep:
+          type: boolean
+        reduceAnimations:
+          type: boolean
+        positionX:
+          type: number
+          format: double
+          maximum: 1.0
+          minimum: 0.0
+        version:
+          type: integer
+          minimum: 1
+    PatchedCurrentUserRequest:
+      type: object
+      description: Gibt ausschließlich die für das Frontend notwendigen Kontodaten
+        aus.
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+    PatchedProjectWriteRequest:
+      type: object
+      description: Validiert Projektdaten und Teilnehmer-IDs getrennt vom Ausgabevertrag.
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 120
+        slugLabel:
+          type: string
+          minLength: 2
+          maxLength: 24
+        description:
+          type: string
+          maxLength: 2000
+        ownerId:
+          type: string
+          format: uuid
+        managerIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        collaboratorIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        startedAt:
+          type: string
+          format: date
+        dueAt:
+          type: string
+          format: date
+        color:
+          type: string
+          minLength: 1
+          maxLength: 7
+        icon:
+          type: string
+          minLength: 1
+          maxLength: 50
+        isPinned:
+          type: boolean
+        allowsOnDemandTasks:
+          type: boolean
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+    PatchedTaskRequest:
+      type: object
+      description: Gibt einen vollständigen WorkspaceTask-Datensatz aus.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 180
+        description:
+          type: string
+          maxLength: 10000
+        priority:
+          $ref: '#/components/schemas/PriorityEnum'
+        startDate:
+          type: string
+          format: date
+          nullable: true
+        dueDate:
+          type: string
+          format: date
+          nullable: true
+        dueTime:
+          type: string
+          format: time
+          nullable: true
+        tags: {}
+        isDone:
+          type: boolean
+        isSharedPool:
+          type: boolean
+        requiresReview:
+          type: boolean
+        reviewHint:
+          type: string
+        createdOutsideColumn:
+          type: boolean
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+    PatchedTaskWriteRequest:
+      type: object
+      description: Validiert schreibbare Task-Felder ohne verschachtelte Fremddaten.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 180
+        description:
+          type: string
+          maxLength: 10000
+        assigneeId:
+          type: string
+          format: uuid
+          nullable: true
+        collaboratorIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        priority:
+          $ref: '#/components/schemas/PriorityEnum'
+        startDate:
+          type: string
+          format: date
+          nullable: true
+        dueDate:
+          type: string
+          format: date
+          nullable: true
+        dueTime:
+          type: string
+          format: time
+          nullable: true
+        tags: {}
+        isSharedPool:
+          type: boolean
+        requiresReview:
+          type: boolean
+        reviewHint:
+          type: string
+        columnId:
+          type: string
+          format: uuid
+          nullable: true
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+    PatchedWorkspaceRequest:
+      type: object
+      description: Gibt Workspace-Grunddaten und die aktuelle Rolle aus.
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 80
+        allow_invites:
+          type: boolean
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+    PriorityEnum:
+      enum:
+      - hoch
+      - mittel
+      - niedrig
+      type: string
+      description: |-
+        * `hoch` - Hoch
+        * `mittel` - Mittel
+        * `niedrig` - Niedrig
+    Project:
+      type: object
+      description: Entspricht dem WorkspaceProject-Interface des Frontends.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        routeKey:
+          type: string
+        slugLabel:
+          type: string
+        name:
+          type: string
+          maxLength: 120
+          minLength: 2
+        description:
+          type: string
+          maxLength: 2000
+        color:
+          type: string
+          maxLength: 7
+        icon:
+          type: string
+          maxLength: 50
+        status:
+          $ref: '#/components/schemas/ProjectStatusEnum'
+        owner:
+          type: object
+          additionalProperties: {}
+          nullable: true
+          description: Liefert den Projekt-Owner.
+          readOnly: true
+        managers:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          description: Liefert projektbezogene Manager.
+          readOnly: true
+        collaborators:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          description: Liefert projektbezogene Mitwirkende.
+          readOnly: true
+        startedAt:
+          type: string
+          format: date
+        dueAt:
+          type: string
+          format: date
+        updatedAt:
+          type: string
+          format: date-time
+          readOnly: true
+        completedAt:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        archivedAt:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        lastOpenedAt:
+          type: string
+          nullable: true
+          description: Liefert den nutzerspezifischen letzten Aufruf.
+          readOnly: true
+        isPinned:
+          type: boolean
+          description: Liefert den nutzerspezifischen Pin-Zustand.
+          readOnly: true
+        allowsOnDemandTasks:
+          type: boolean
+        dueState:
+          type: string
+          description: Ermittelt den im Frontend verwendeten Fälligkeitszustand.
+          readOnly: true
+        dueSummary:
+          type: string
+          description: Formuliert die verbleibende Zeit nutzerfreundlich.
+          readOnly: true
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - allowsOnDemandTasks
+      - archivedAt
+      - collaborators
+      - completedAt
+      - dueAt
+      - dueState
+      - dueSummary
+      - id
+      - isPinned
+      - lastOpenedAt
+      - managers
+      - name
+      - owner
+      - routeKey
+      - slugLabel
+      - startedAt
+      - updatedAt
+    ProjectRequest:
+      type: object
+      description: Entspricht dem WorkspaceProject-Interface des Frontends.
+      properties:
+        routeKey:
+          type: string
+          minLength: 1
+        slugLabel:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 2
+          maxLength: 120
+        description:
+          type: string
+          maxLength: 2000
+        color:
+          type: string
+          minLength: 1
+          maxLength: 7
+        icon:
+          type: string
+          minLength: 1
+          maxLength: 50
+        status:
+          $ref: '#/components/schemas/ProjectStatusEnum'
+        startedAt:
+          type: string
+          format: date
+        dueAt:
+          type: string
+          format: date
+        allowsOnDemandTasks:
+          type: boolean
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - allowsOnDemandTasks
+      - dueAt
+      - name
+      - routeKey
+      - slugLabel
+      - startedAt
+    ProjectStatusEnum:
+      enum:
+      - active
+      - completed
+      - archived
+      type: string
+      description: |-
+        * `active` - Aktiv
+        * `completed` - Abgeschlossen
+        * `archived` - Archiviert
+    ProjectWrite:
+      type: object
+      description: Validiert Projektdaten und Teilnehmer-IDs getrennt vom Ausgabevertrag.
+      properties:
+        name:
+          type: string
+          maxLength: 120
+          minLength: 2
+        slugLabel:
+          type: string
+          maxLength: 24
+          minLength: 2
+        description:
+          type: string
+          maxLength: 2000
+        ownerId:
+          type: string
+          format: uuid
+        managerIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        collaboratorIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        startedAt:
+          type: string
+          format: date
+        dueAt:
+          type: string
+          format: date
+        color:
+          type: string
+          maxLength: 7
+        icon:
+          type: string
+          maxLength: 50
+        isPinned:
+          type: boolean
+        allowsOnDemandTasks:
+          type: boolean
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - dueAt
+      - name
+    ProjectWriteRequest:
+      type: object
+      description: Validiert Projektdaten und Teilnehmer-IDs getrennt vom Ausgabevertrag.
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 120
+        slugLabel:
+          type: string
+          minLength: 2
+          maxLength: 24
+        description:
+          type: string
+          maxLength: 2000
+        ownerId:
+          type: string
+          format: uuid
+        managerIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        collaboratorIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        startedAt:
+          type: string
+          format: date
+        dueAt:
+          type: string
+          format: date
+        color:
+          type: string
+          minLength: 1
+          maxLength: 7
+        icon:
+          type: string
+          minLength: 1
+          maxLength: 50
+        isPinned:
+          type: boolean
+        allowsOnDemandTasks:
+          type: boolean
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - dueAt
+      - name
+    RegistrationRequest:
+      type: object
+      description: Validiert eine Registrierung unabhängig von Frontendprüfungen.
+      properties:
+        displayName:
+          type: string
+          minLength: 2
+          maxLength: 60
+        email:
+          type: string
+          format: email
+          minLength: 1
+          maxLength: 254
+        password:
+          type: string
+          writeOnly: true
+          minLength: 12
+          maxLength: 128
+        privacyAcknowledged:
+          type: boolean
+      required:
+      - displayName
+      - email
+      - password
+      - privacyAcknowledged
+    SortModeEnum:
+      enum:
+      - title
+      - date
+      type: string
+      description: "* `` - \n* `title` - title\n* `date` - date"
+    Subtask:
+      type: object
+      description: Gibt zuweisbare Unteraufgaben im Frontendformat aus.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        title:
+          type: string
+          maxLength: 180
+          minLength: 1
+        assignee:
+          type: object
+          additionalProperties: {}
+          nullable: true
+          description: Liefert die Zuweisung als WorkspaceMember.
+          readOnly: true
+        isDone:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - assignee
+      - createdAt
+      - id
+      - isDone
+      - title
+    SubtaskRequest:
+      type: object
+      description: Gibt zuweisbare Unteraufgaben im Frontendformat aus.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 180
+        isDone:
+          type: boolean
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - isDone
+      - title
+    SystemNotification:
+      type: object
+      description: Entspricht dem WorkspaceSystemNotification-Interface.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        kind:
+          $ref: '#/components/schemas/SystemNotificationKindEnum'
+        title:
+          type: string
+          maxLength: 160
+        body:
+          type: string
+          maxLength: 2000
+        icon:
+          type: string
+          maxLength: 50
+        actor:
+          type: object
+          additionalProperties: {}
+          nullable: true
+          description: Liefert den optionalen Auslöser.
+          readOnly: true
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+        isRead:
+          type: boolean
+          description: Leitet den Lesestatus aus dem Zeitstempel ab.
+          readOnly: true
+        route:
+          type: string
+          maxLength: 300
+        queryParams: {}
+      required:
+      - actor
+      - body
+      - createdAt
+      - icon
+      - id
+      - isRead
+      - kind
+      - queryParams
+      - title
+    SystemNotificationKindEnum:
+      enum:
+      - task
+      - project
+      - member
+      - automation
+      - system
+      type: string
+      description: |-
+        * `task` - Task
+        * `project` - Projekt
+        * `member` - Mitglied
+        * `automation` - Automation
+        * `system` - System
+    SystemNotificationRequest:
+      type: object
+      description: Entspricht dem WorkspaceSystemNotification-Interface.
+      properties:
+        kind:
+          $ref: '#/components/schemas/SystemNotificationKindEnum'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 160
+        body:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        icon:
+          type: string
+          minLength: 1
+          maxLength: 50
+        route:
+          type: string
+          maxLength: 300
+        queryParams: {}
+      required:
+      - body
+      - icon
+      - kind
+      - queryParams
+      - title
+    Task:
+      type: object
+      description: Gibt einen vollständigen WorkspaceTask-Datensatz aus.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        title:
+          type: string
+          maxLength: 180
+          minLength: 1
+        description:
+          type: string
+          maxLength: 10000
+        projectId:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        projectTitle:
+          type: string
+          readOnly: true
+          nullable: true
+        projectAllowsOnDemandTasks:
+          type: boolean
+          description: Liefert die projektspezifische Abruf-Aufgaben-Einstellung.
+          readOnly: true
+        parentTaskId:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        parentTaskTitle:
+          type: string
+          readOnly: true
+          nullable: true
+        isSubtaskMirror:
+          type: boolean
+          description: Erkennt persönliche Spiegelaufgaben einer Unteraufgabe.
+          readOnly: true
+        sourceTaskId:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        sourceSubtaskId:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        owner:
+          type: object
+          additionalProperties: {}
+          nullable: true
+          description: Liefert den Task-Owner.
+          readOnly: true
+        assignee:
+          type: object
+          additionalProperties: {}
+          nullable: true
+          description: Liefert die verantwortliche Person.
+          readOnly: true
+        collaborators:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          description: Liefert weitere Mitwirkende.
+          readOnly: true
+        priority:
+          $ref: '#/components/schemas/PriorityEnum'
+        startDate:
+          type: string
+          format: date
+          nullable: true
+        dueDate:
+          type: string
+          format: date
+          nullable: true
+        dueTime:
+          type: string
+          format: time
+          nullable: true
+        tags: {}
+        subtasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/Subtask'
+          readOnly: true
+        comments:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          description: Filtert weich gelöschte Kommentare aus.
+          readOnly: true
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Attachment'
+          readOnly: true
+        history:
+          type: array
+          items:
+            $ref: '#/components/schemas/History'
+          readOnly: true
+        subtaskCount:
+          type: integer
+          description: Zählt alle Unteraufgaben.
+          readOnly: true
+        completedSubtaskCount:
+          type: integer
+          description: Zählt erledigte Unteraufgaben.
+          readOnly: true
+        commentCount:
+          type: integer
+          description: Zählt sichtbare Kommentare.
+          readOnly: true
+        attachmentCount:
+          type: integer
+          description: Zählt gespeicherte Anhänge.
+          readOnly: true
+        isRecurring:
+          type: boolean
+          description: Prüft eine vorhandene Wiederholungsregel ohne Fehler bei fehlender
+            Relation.
+          readOnly: true
+        recurrenceLabel:
+          type: string
+          nullable: true
+          description: Liefert die kurze Wiederholungsbeschreibung.
+          readOnly: true
+        recurrenceRule:
+          type: object
+          additionalProperties: {}
+          nullable: true
+          description: Liefert die vollständige Regel.
+          readOnly: true
+        isDone:
+          type: boolean
+        completedAt:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        isSharedPool:
+          type: boolean
+        requiresReview:
+          type: boolean
+        reviewHint:
+          type: string
+        createdOutsideColumn:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+        updatedAt:
+          type: string
+          format: date-time
+          readOnly: true
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - assignee
+      - attachmentCount
+      - attachments
+      - collaborators
+      - commentCount
+      - comments
+      - completedAt
+      - completedSubtaskCount
+      - createdAt
+      - createdOutsideColumn
+      - dueDate
+      - dueTime
+      - history
+      - id
+      - isDone
+      - isRecurring
+      - isSharedPool
+      - isSubtaskMirror
+      - owner
+      - parentTaskId
+      - parentTaskTitle
+      - projectAllowsOnDemandTasks
+      - projectId
+      - projectTitle
+      - recurrenceLabel
+      - recurrenceRule
+      - requiresReview
+      - reviewHint
+      - sourceSubtaskId
+      - sourceTaskId
+      - startDate
+      - subtaskCount
+      - subtasks
+      - title
+      - updatedAt
+    TaskRequest:
+      type: object
+      description: Gibt einen vollständigen WorkspaceTask-Datensatz aus.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 180
+        description:
+          type: string
+          maxLength: 10000
+        priority:
+          $ref: '#/components/schemas/PriorityEnum'
+        startDate:
+          type: string
+          format: date
+          nullable: true
+        dueDate:
+          type: string
+          format: date
+          nullable: true
+        dueTime:
+          type: string
+          format: time
+          nullable: true
+        tags: {}
+        isDone:
+          type: boolean
+        isSharedPool:
+          type: boolean
+        requiresReview:
+          type: boolean
+        reviewHint:
+          type: string
+        createdOutsideColumn:
+          type: boolean
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - createdOutsideColumn
+      - dueDate
+      - dueTime
+      - isDone
+      - isSharedPool
+      - requiresReview
+      - reviewHint
+      - startDate
+      - title
+    TaskWrite:
+      type: object
+      description: Validiert schreibbare Task-Felder ohne verschachtelte Fremddaten.
+      properties:
+        title:
+          type: string
+          maxLength: 180
+          minLength: 1
+        description:
+          type: string
+          maxLength: 10000
+        assigneeId:
+          type: string
+          format: uuid
+          nullable: true
+        collaboratorIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        priority:
+          $ref: '#/components/schemas/PriorityEnum'
+        startDate:
+          type: string
+          format: date
+          nullable: true
+        dueDate:
+          type: string
+          format: date
+          nullable: true
+        dueTime:
+          type: string
+          format: time
+          nullable: true
+        tags: {}
+        isSharedPool:
+          type: boolean
+        requiresReview:
+          type: boolean
+        reviewHint:
+          type: string
+        columnId:
+          type: string
+          format: uuid
+          nullable: true
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - title
+    TaskWriteRequest:
+      type: object
+      description: Validiert schreibbare Task-Felder ohne verschachtelte Fremddaten.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 180
+        description:
+          type: string
+          maxLength: 10000
+        assigneeId:
+          type: string
+          format: uuid
+          nullable: true
+        collaboratorIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        priority:
+          $ref: '#/components/schemas/PriorityEnum'
+        startDate:
+          type: string
+          format: date
+          nullable: true
+        dueDate:
+          type: string
+          format: date
+          nullable: true
+        dueTime:
+          type: string
+          format: time
+          nullable: true
+        tags: {}
+        isSharedPool:
+          type: boolean
+        requiresReview:
+          type: boolean
+        reviewHint:
+          type: string
+        columnId:
+          type: string
+          format: uuid
+          nullable: true
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+      required:
+      - title
+    TokenRequest:
+      type: object
+      description: Begrenzt die Länge eines URL-sicheren Einmal-Tokens.
+      properties:
+        token:
+          type: string
+          minLength: 32
+          maxLength: 256
+      required:
+      - token
+    ToolSettingsRequest:
+      type: object
+      description: Validiert optionale Werkzeuge und Wetterort.
+      properties:
+        pomodoro:
+          type: boolean
+        taskTimer:
+          type: boolean
+        weather:
+          type: boolean
+        weatherLocation:
+          type: string
+          maxLength: 120
+    TriggerEnum:
+      enum:
+      - task.completed
+      - task.reopened
+      - task.created
+      - task.assigned
+      - column.entered
+      type: string
+      description: |-
+        * `task.completed` - Task abgeschlossen
+        * `task.reopened` - Task wieder geöffnet
+        * `task.created` - Task erstellt
+        * `task.assigned` - Task zugewiesen
+        * `column.entered` - Spalte betreten
+    Workspace:
+      type: object
+      description: Gibt Workspace-Grunddaten und die aktuelle Rolle aus.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          maxLength: 80
+          minLength: 2
+        allow_invites:
+          type: boolean
+        currentRole:
+          type: string
+          nullable: true
+          description: Liefert die Rolle des anfragenden Nutzers.
+          readOnly: true
+        version:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - currentRole
+      - id
+      - name
+      - updated_at
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: cm_session
+      description: HttpOnly-Sitzungscookie. Schreibende Anfragen benötigen zusätzlich
+        den X-CSRFToken-Header.
