@@ -53,3 +53,11 @@ Task-Aktionen wie Verschieben, Abschließen, Archivieren, Unteraufgaben, Komment
 - `/ws/v1/inbox/`
 
 Die WebSocket-Verbindungen verwenden dieselbe authentifizierte Django-Sitzung wie die REST-API.
+
+
+## Demo-Daten
+
+- `GET /api/v1/demo/status/`
+- `POST /api/v1/demo/reset/`
+
+Der Reset ist standardmäßig nur lokal, ausschließlich für Staff-Konten und höchstens zweimal pro Minute verfügbar. Für geplante nächtliche Resets wird `python manage.py reset_demo_data` verwendet. Das Management-Command verwendet ohne E-Mail nur dann automatisch einen Owner, wenn exakt ein aktives Staff-Konto existiert.

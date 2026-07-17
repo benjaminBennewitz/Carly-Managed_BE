@@ -110,7 +110,7 @@ class WorkspaceViewSet(viewsets.ReadOnlyModelViewSet[Workspace]):
         """Begrenzt die Liste auf aktive Mitgliedschaften."""
         return workspaces_for_user(self.request.user).prefetch_related("memberships__user")
 
-    @action(detail=True, methods=["get", "patch"], url_path="members")
+    @action(detail=True, methods=["get", "patch", "delete"], url_path="members")
     def members(self, request: Any, pk: str | None = None) -> Response:
         """Listet Mitglieder oder ändert Rolle und Avatarfarbe eines Mitglieds."""
         workspace = self.get_object()
@@ -130,6 +130,21 @@ class WorkspaceViewSet(viewsets.ReadOnlyModelViewSet[Workspace]):
         )
         if membership is None:
             raise NotFound("Mitglied nicht gefunden.")
+        if request.method == "DELETE":
+            if membership.user_id == request.user.id:
+                raise ConflictError("Das eigene Workspace-Konto kann nicht entfernt werden.")
+            if membership.role == WorkspaceRole.OWNER:
+                raise ConflictError("Der Workspace-Owner kann nicht entfernt werden.")
+            if workspace.projects.filter(owner_id=membership.user_id).exists():
+                raise ConflictError(
+                    "Das Mitglied besitzt noch Projekte und kann nicht entfernt werden."
+                )
+            with transaction.atomic():
+                membership.user.project_participations.filter(project__workspace=workspace).delete()
+                membership.user.project_preferences.filter(project__workspace=workspace).delete()
+                membership.is_active = False
+                membership.save(update_fields=("is_active", "updated_at"))
+            return Response(status=status.HTTP_204_NO_CONTENT)
         role = request.data.get("role", membership.role)
         avatar_color = request.data.get("avatarColor", membership.avatar_color)
         if membership.role == WorkspaceRole.OWNER and role != WorkspaceRole.OWNER:
@@ -579,6 +594,7 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
                 actor=request.user,
                 title=serializer.validated_data["title"],
                 assignee=assignee,
+                subtask_id=serializer.validated_data.get("id"),
             )
             return Response(
                 SubtaskSerializer(subtask, context=_serializer_context(self)).data,
@@ -638,9 +654,14 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
                 raise ValidationError(
                     {"mentionIds": "Erwähnte Personen müssen Workspace-Mitglieder sein."}
                 )
-            comment = TaskComment.objects.create(
-                task=task, author=request.user, body=serializer.validated_data["body"]
-            )
+            comment_kwargs = {
+                "task": task,
+                "author": request.user,
+                "body": serializer.validated_data["body"],
+            }
+            if serializer.validated_data.get("id") is not None:
+                comment_kwargs["id"] = serializer.validated_data["id"]
+            comment = TaskComment.objects.create(**comment_kwargs)
             comment.mentions.set(mentions)
             return Response(
                 CommentSerializer(comment, context=_serializer_context(self)).data,
@@ -662,14 +683,25 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
 
     @action(
         detail=True,
-        methods=["post"],
+        methods=["post", "delete"],
+        url_path=r"attachments(?:/(?P<attachment_id>[^/.]+))?",
         parser_classes=[MultiPartParser],
         throttle_classes=[UploadRateThrottle],
     )
-    def attachments(self, request: Any, pk: str | None = None) -> Response:
-        """Speichert einen oder mehrere geprüfte private Anhänge."""
+    def attachments(
+        self, request: Any, pk: str | None = None, attachment_id: str | None = None
+    ) -> Response:
+        """Speichert geprüfte Anhänge oder entfernt einen einzelnen Anhang."""
         task = self.get_object()
         require_board_editor(user=request.user, board=task.board)
+        if request.method == "DELETE":
+            attachment = task.attachments.filter(pk=attachment_id).first()
+            if attachment is None:
+                raise NotFound("Anhang nicht gefunden.")
+            attachment.file.delete(save=False)
+            attachment.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
         files = request.FILES.getlist("files")
         if not files or len(files) > 10:
             raise ValidationError({"files": "Lade ein bis zehn Dateien gleichzeitig hoch."})

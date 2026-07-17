@@ -38,6 +38,8 @@ env = environ.Env(
     EMAIL_USE_TLS=(bool, True),
     EMAIL_USE_SSL=(bool, False),
     EMAIL_TIMEOUT=(int, 10),
+    DEMO_DATA_RESET_ENABLED=(bool, False),
+    DEMO_DATA_RESET_ALLOW_PRODUCTION=(bool, False),
 )
 
 
@@ -106,6 +108,7 @@ INSTALLED_APPS = [
     "apps.inbox.apps.InboxConfig",
     "apps.preferences.apps.PreferencesConfig",
     "apps.realtime.apps.RealtimeConfig",
+    "apps.demo.apps.DemoConfig",
 ]
 
 MIDDLEWARE = [
@@ -221,7 +224,7 @@ LOGIN_FAILURE_LIMIT = env("LOGIN_FAILURE_LIMIT")
 LOGIN_LOCK_MINUTES = env("LOGIN_LOCK_MINUTES")
 TRUST_X_FORWARDED_FOR = env("TRUST_X_FORWARDED_FOR")
 TRUSTED_PROXY_IPS = set(env.list("TRUSTED_PROXY_IPS", default=[]))
-FRONTEND_URL = env("DJANGO_FRONTEND_URL", default="http://localhost:4200")
+FRONTEND_URL = env("DJANGO_FRONTEND_URL", default="http://localhost:4555")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Carly Managed <noreply@localhost>")
 EMAIL_BACKEND = env(
     "EMAIL_BACKEND",
@@ -234,6 +237,11 @@ EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
 EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS")
 EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL")
 EMAIL_TIMEOUT = env.int("EMAIL_TIMEOUT")
+
+DEMO_DATA_RESET_ENABLED = env.bool("DEMO_DATA_RESET_ENABLED")
+DEMO_DATA_RESET_ALLOW_PRODUCTION = env.bool("DEMO_DATA_RESET_ALLOW_PRODUCTION")
+DEMO_OWNER_EMAIL = env("DEMO_OWNER_EMAIL", default="").strip().lower()
+DEMO_WORKSPACE_NAME = env("DEMO_WORKSPACE_NAME", default="Carly Managed Demo").strip()
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
@@ -262,13 +270,14 @@ REST_FRAMEWORK = {
         "auth_verify": "10/hour",
         "uploads": "30/hour",
         "search": "60/min",
+        "demo_reset": "2/min",
     },
 }
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "Carly Managed API",
     "DESCRIPTION": "REST-API für Carly Managed mit Session-Authentifizierung und WebSockets.",
-    "VERSION": "1.0.1",
+    "VERSION": "1.1.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "COMPONENT_SPLIT_REQUEST": True,
     "ENUM_NAME_OVERRIDES": {

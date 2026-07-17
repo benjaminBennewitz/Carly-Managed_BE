@@ -17,18 +17,20 @@ Angular muss Requests mit `withCredentials: true` senden. Vor dem ersten schreib
 
 Die Sitzung selbst liegt ausschließlich im sicheren, nicht per JavaScript lesbaren Cookie `cm_session`. Es werden keine Access- oder Refresh-Tokens im Browser-Speicher benötigt.
 
-## Empfohlene Umstellung des Preview-Frontends
+## Umgesetzte Angular-Anbindung
 
-Die vorhandenen Preview-Services verwenden teilweise `localStorage`. Sie sollten schrittweise durch folgende Adapter ersetzt werden:
+Das Angular-Frontend verwendet keine fachlichen Preview- oder Mock-Services mehr. Die angebundenen Adapter umfassen:
 
-1. `AuthService` auf `/api/v1/auth/*`
-2. Workspace- und Projektzugriff auf `/api/v1/workspaces/`, `/projects/` und `/boards/`
-3. Task-Aktionen auf `/api/v1/workspaces/tasks/`
-4. Inbox auf `/api/v1/inbox/notifications/` und `/conversations/`
-5. Einstellungen auf `/api/v1/preferences/settings/` und `/carly/`
-6. Live-Funktionen auf die Board- und Inbox-WebSockets
+1. `AuthService` und `SessionService` auf `/api/v1/auth/*`
+2. Workspace-, Projekt-, Board- und Taskzugriff auf `/api/v1/workspaces/*`
+3. Inbox auf `/api/v1/inbox/notifications/` und `/conversations/`
+4. Einstellungen auf `/api/v1/preferences/settings/`
+5. Carly auf `/api/v1/preferences/carly/` und die Aktionsendpunkte
+6. Demo-Status und Reset auf `/api/v1/demo/*`
 
-Die exakten Request- und Response-Typen können aus `docs/openapi.yml` generiert werden.
+Der Entwicklungsserver läuft auf Port 4555. `proxy.conf.json` leitet `/api`, `/ws` und `/media` an Daphne auf Port 8000 weiter. Gerätebezogene Darstellungswerte dürfen lokal gespeichert bleiben; Geschäftsdaten und Sitzungen werden ausschließlich serverseitig verwaltet.
+
+Die exakten Request- und Response-Typen befinden sich in `docs/openapi.yml`.
 
 ## Versionskonflikte
 
@@ -68,3 +70,7 @@ Fehler dürfen in der UI nicht ausschließlich über Farbe vermittelt werden. Te
 ## WebSocket-Ereignisse
 
 Board-Verbindungen akzeptieren ausschließlich Ereignistypen, die der Server explizit kennt. Präsenz, Cursor und Bearbeitungshinweise sind flüchtig und werden nicht als Geschäftsdaten persistiert. Dauerhafte Task-Änderungen erfolgen weiterhin über REST; anschließend kann das Frontend das Ergebnis als Live-Ereignis an andere verbundene Clients verteilen.
+
+## Demo-Reset im Frontend
+
+Der Tab **Einstellungen → Testdaten** fragt zunächst `/api/v1/demo/status/` ab. Der Button ist nur aktiv, wenn das Feature-Flag gesetzt ist, die Sitzung zu einem Staff-Konto gehört und die Umgebung den Reset erlaubt. Nach erfolgreichem Reset lädt Angular Workspace, Präferenzen und Carly-Zustand erneut.

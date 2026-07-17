@@ -17,3 +17,7 @@ staticfiles/
 .idea/
 .vscode/
 .DS_Store
+
+# Laufzeitdateien
+logs/
+celerybeat-schedule*

@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Carly Managed API
-  version: 1.0.1
+  version: 1.1.0
   description: REST-API für Carly Managed mit Session-Authentifizierung und WebSockets.
 paths:
   /api/v1/auth/csrf/:
@@ -236,6 +236,37 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CurrentUser'
+          description: ''
+  /api/v1/demo/reset/:
+    post:
+      operationId: demo_reset_create
+      description: Erzeugt den reproduzierbaren Ausgangsstand in einer Transaktion
+        neu.
+      tags:
+      - demo
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DemoResetResult'
+          description: ''
+  /api/v1/demo/status/:
+    get:
+      operationId: demo_status_retrieve
+      description: Bewertet Feature-Flag, Umgebung und Staff-Status ohne Seiteneffekt.
+      tags:
+      - demo
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DemoStatus'
           description: ''
   /api/v1/inbox/conversations/:
     get:
@@ -834,6 +865,24 @@ paths:
               schema:
                 $ref: '#/components/schemas/Workspace'
           description: ''
+    delete:
+      operationId: workspaces_members_destroy
+      description: Listet Mitglieder oder ändert Rolle und Avatarfarbe eines Mitglieds.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der workspace identifiziert.
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: No response body
   /api/v1/workspaces/attachments/{attachment_id}/download/:
     get:
       operationId: workspaces_attachments_download_retrieve
@@ -1976,7 +2025,7 @@ paths:
   /api/v1/workspaces/tasks/{id}/attachments/:
     post:
       operationId: workspaces_tasks_attachments_create
-      description: Speichert einen oder mehrere geprüfte private Anhänge.
+      description: Speichert geprüfte Anhänge oder entfernt einen einzelnen Anhang.
       parameters:
       - in: path
         name: id
@@ -2002,6 +2051,24 @@ paths:
               schema:
                 $ref: '#/components/schemas/Task'
           description: ''
+    delete:
+      operationId: workspaces_tasks_attachments_destroy
+      description: Speichert geprüfte Anhänge oder entfernt einen einzelnen Anhang.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: Ein UUID-String, der task identifiziert.
+        required: true
+      tags:
+      - workspaces
+      security:
+      - sessionCookie: []
+      responses:
+        '204':
+          description: No response body
   /api/v1/workspaces/tasks/{id}/comments/:
     post:
       operationId: workspaces_tasks_comments_create
@@ -2574,8 +2641,9 @@ components:
           readOnly: true
         position:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
         version:
           type: integer
           maximum: 9223372036854775807
@@ -2607,8 +2675,9 @@ components:
           type: boolean
         position:
           type: integer
-          maximum: 2147483647
+          maximum: 9223372036854775807
           minimum: 0
+          format: int64
         version:
           type: integer
           maximum: 9223372036854775807
@@ -2870,6 +2939,48 @@ components:
       - email
       - emailVerified
       - id
+    DemoResetResult:
+      type: object
+      description: Bestätigt den neu erzeugten Workspace und seine Datensatzmengen.
+      properties:
+        workspaceId:
+          type: string
+          format: uuid
+        workspaceName:
+          type: string
+        projects:
+          type: integer
+          minimum: 0
+        tasks:
+          type: integer
+          minimum: 0
+        members:
+          type: integer
+          minimum: 0
+        notifications:
+          type: integer
+          minimum: 0
+      required:
+      - members
+      - notifications
+      - projects
+      - tasks
+      - workspaceId
+      - workspaceName
+    DemoStatus:
+      type: object
+      description: Liefert ausschließlich die für den Einstellungsbutton nötigen Angaben.
+      properties:
+        enabled:
+          type: boolean
+        canReset:
+          type: boolean
+        workspaceName:
+          type: string
+      required:
+      - canReset
+      - enabled
+      - workspaceName
     EmailOnlyRequest:
       type: object
       description: Validiert eine einzelne E-Mail-Adresse für Wiederherstellungen.
@@ -3432,6 +3543,9 @@ components:
       type: object
       description: Validiert Projektdaten und Teilnehmer-IDs getrennt vom Ausgabevertrag.
       properties:
+        id:
+          type: string
+          format: uuid
         name:
           type: string
           minLength: 2
@@ -3524,6 +3638,9 @@ components:
       type: object
       description: Validiert schreibbare Task-Felder ohne verschachtelte Fremddaten.
       properties:
+        id:
+          type: string
+          format: uuid
         title:
           type: string
           minLength: 1
@@ -3765,6 +3882,9 @@ components:
       type: object
       description: Validiert Projektdaten und Teilnehmer-IDs getrennt vom Ausgabevertrag.
       properties:
+        id:
+          type: string
+          format: uuid
         name:
           type: string
           maxLength: 120
@@ -3817,6 +3937,9 @@ components:
       type: object
       description: Validiert Projektdaten und Teilnehmer-IDs getrennt vom Ausgabevertrag.
       properties:
+        id:
+          type: string
+          format: uuid
         name:
           type: string
           minLength: 2
@@ -4298,6 +4421,9 @@ components:
       type: object
       description: Validiert schreibbare Task-Felder ohne verschachtelte Fremddaten.
       properties:
+        id:
+          type: string
+          format: uuid
         title:
           type: string
           maxLength: 180
@@ -4350,6 +4476,9 @@ components:
       type: object
       description: Validiert schreibbare Task-Felder ohne verschachtelte Fremddaten.
       properties:
+        id:
+          type: string
+          format: uuid
         title:
           type: string
           minLength: 1

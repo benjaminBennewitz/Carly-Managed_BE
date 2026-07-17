@@ -428,6 +428,7 @@ class TaskSerializer(MemberLookupMixin, serializers.ModelSerializer[Task]):
 class TaskWriteSerializer(serializers.ModelSerializer[Task]):
     """Validiert schreibbare Task-Felder ohne verschachtelte Fremddaten."""
 
+    id = serializers.UUIDField(required=False)
     assigneeId = serializers.PrimaryKeyRelatedField(
         source="assignee",
         queryset=User.objects.all(),
@@ -453,6 +454,7 @@ class TaskWriteSerializer(serializers.ModelSerializer[Task]):
     class Meta:
         model = Task
         fields = (
+            "id",
             "title",
             "description",
             "assigneeId",
@@ -678,6 +680,7 @@ class ProjectSerializer(MemberLookupMixin, serializers.ModelSerializer[Project])
 class ProjectWriteSerializer(serializers.ModelSerializer[Project]):
     """Validiert Projektdaten und Teilnehmer-IDs getrennt vom Ausgabevertrag."""
 
+    id = serializers.UUIDField(required=False)
     slugLabel = serializers.CharField(
         source="slug_label", min_length=2, max_length=24, required=False
     )
@@ -698,6 +701,7 @@ class ProjectWriteSerializer(serializers.ModelSerializer[Project]):
     class Meta:
         model = Project
         fields = (
+            "id",
             "name",
             "slugLabel",
             "description",
@@ -869,6 +873,7 @@ class BoardColumnWriteSerializer(serializers.ModelSerializer[BoardColumn]):
 class SubtaskWriteSerializer(serializers.Serializer[dict[str, Any]]):
     """Validiert das Erstellen und Ändern einer Unteraufgabe."""
 
+    id = serializers.UUIDField(required=False)
     title = serializers.CharField(min_length=1, max_length=180, required=False)
     assigneeId = serializers.PrimaryKeyRelatedField(
         source="assignee",
@@ -883,6 +888,7 @@ class SubtaskWriteSerializer(serializers.Serializer[dict[str, Any]]):
 class CommentWriteSerializer(serializers.Serializer[dict[str, Any]]):
     """Validiert Kommentartext und strukturierte Erwähnungen."""
 
+    id = serializers.UUIDField(required=False)
     body = serializers.CharField(min_length=1, max_length=5000, trim_whitespace=True)
     mentionIds = serializers.PrimaryKeyRelatedField(
         source="mentions",

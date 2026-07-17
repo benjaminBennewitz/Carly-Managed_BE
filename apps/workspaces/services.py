@@ -454,10 +454,25 @@ def add_history(
 
 
 @transaction.atomic
-def create_subtask(*, task: Task, actor: User, title: str, assignee: User | None) -> Subtask:
+def create_subtask(
+    *,
+    task: Task,
+    actor: User,
+    title: str,
+    assignee: User | None,
+    subtask_id: Any | None = None,
+) -> Subtask:
     """Erstellt eine Unteraufgabe und optional eine persönliche Spiegelaufgabe."""
     position = _next_position(Subtask, task=task)
-    subtask = Subtask.objects.create(task=task, title=title, assignee=assignee, position=position)
+    create_kwargs: dict[str, Any] = {
+        "task": task,
+        "title": title,
+        "assignee": assignee,
+        "position": position,
+    }
+    if subtask_id is not None:
+        create_kwargs["id"] = subtask_id
+    subtask = Subtask.objects.create(**create_kwargs)
     add_history(
         task=task, actor=actor, action=f"Unteraufgabe „{title}“ erstellt", icon="playlist_add"
     )

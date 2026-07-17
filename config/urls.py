@@ -18,4 +18,5 @@ urlpatterns = [
     path("api/v1/workspaces/", include("apps.workspaces.urls")),
     path("api/v1/inbox/", include("apps.inbox.urls")),
     path("api/v1/preferences/", include("apps.preferences.urls")),
+    path("api/v1/demo/", include("apps.demo.urls")),
 ]

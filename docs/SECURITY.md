@@ -29,6 +29,16 @@
 - WebSocket-Verbindungen prüfen dieselbe Session und Board-Berechtigung
 - Private Anhänge werden niemals direkt durch den Webserver veröffentlicht
 
+
+## Demo-Daten
+
+- API-Reset nur bei aktivem Feature-Flag und authentifiziertem Staff-Konto
+- produktiv zusätzliches explizites Freigabe-Flag erforderlich
+- Rate-Limit von zwei Resets pro Minute
+- transaktionaler Ersatz ausschließlich des benannten Demo-Workspaces des Owners
+- keine Löschung anderer Workspaces oder Benutzerkonten
+- geplante Resets wählen niemals zufällig aus mehreren Staff-Konten
+
 ## Produktion
 
 - HTTPS-Weiterleitung, HSTS, sichere Cookies, `X-Frame-Options: DENY` und MIME-Sniffing-Schutz

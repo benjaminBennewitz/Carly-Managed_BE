@@ -1,101 +1,138 @@
 <!-- README.md -->
 # Carly Managed Backend
 
-Produktionsnahes Django-Backend für das Angular-Frontend **Carly Managed**. Der Quellcode folgt PEP 8; Module, Klassen und öffentliche Funktionen sind mit deutschen Docstrings nach PEP 257 dokumentiert.
+Produktionsnahes Django-Backend für das Angular-Frontend **Carly Managed**. Der Quellcode folgt PEP 8; Module, Klassen und öffentliche Funktionen besitzen deutsche Docstrings nach PEP 257.
 
 ## Technischer Stack
 
 - Python 3.13
 - Django 5.2 LTS und Django REST Framework
 - PostgreSQL für dauerhafte Geschäftsdaten
-- Redis für Cache, Channels und Celery
+- Redis beziehungsweise Memurai für Cache, Channels und Celery
 - Django Channels mit Daphne für WebSockets
 - Celery Worker und Celery Beat für Wiederholungen und Wartungsaufgaben
 
 ## Enthaltene Domänen
 
-- Sichere Registrierung, E-Mail-Verifizierung, Anmeldung und Passwort-Wiederherstellung
+- Registrierung, E-Mail-Verifizierung, Session-Login und Passwort-Wiederherstellung
 - Workspaces, Mitglieder, Rollen, Projekte und Projektbeteiligte
 - Persönliche und projektbezogene Boards, Spalten, Tasks und Unteraufgaben
-- Kommentare, Erwähnungen, private Anhänge, Wiederholungen und Automationen
+- Kommentare, private Anhänge, Wiederholungen, Automationen und Historie
 - Optimistische Versionskontrolle gegen unbemerkte parallele Überschreibungen
-- Einladungen und Beitrittsanfragen
-- Inbox, Systembenachrichtigungen, Gespräche und Chat-Nachrichten
+- Einladungen, Beitrittsanfragen, Inbox, Benachrichtigungen und Gespräche
 - Nutzerpräferenzen, Barrierefreiheit und Carly-Fortschritt
 - WebSockets für Präsenz, Live-Cursor, Bearbeitungshinweise und Inbox-Ereignisse
-- Celery-Aufgaben für Wiederholungen, Einladungsablauf und Carly-Streaks
-- OpenAPI-Schema, Swagger UI, Health-Endpunkte und stabile Fehlerantworten
+- Deterministische Demo-Daten mit manuellem und nächtlichem Reset
 
-## Lokaler Start mit Docker
+## Lokale Entwicklung unter Windows
 
-1. Die mitgelieferte `.env.local` prüfen und bei Bedarf PostgreSQL- sowie Redis-Zugangsdaten anpassen.
-2. Container mit der lokalen ENV-Datei starten:
+Die folgenden Befehle werden in der klassischen Eingabeaufforderung ausgeführt:
 
-```bash
-docker compose --env-file .env.local up --build
-```
-
-3. Administratorkonto anlegen:
-
-```bash
-docker compose exec api python manage.py createsuperuser
-```
-
-Migrationen und statische Dateien werden beim Start des API-Containers vorbereitet. Die API läuft anschließend unter `http://localhost:8000/api/v1/`, die Swagger UI unter `http://localhost:8000/api/docs/`.
-
-## Lokaler Start ohne Docker
-
-### Windows PowerShell
-
-```powershell
+```cmd
+cd /d "C:\Pfad\zu\Carly-Managed_BE"
 py -3.13 -m venv .venv
-.\.venv\Scripts\Activate.ps1
+.venv\Scripts\activate.bat
+python -m pip install --upgrade pip
 python -m pip install -r requirements-dev.txt
 python manage.py migrate
-python manage.py runserver
+python manage.py createsuperuser
 ```
 
-### Linux oder macOS
+PostgreSQL und Memurai müssen separat laufen. Lokal lädt das Backend automatisch `.env.local` und `config.settings.development`.
 
-```bash
-python3.13 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements-dev.txt
-python manage.py migrate
-python manage.py runserver
+Daphne starten:
+
+```cmd
+daphne -b localhost -p 8000 config.asgi:application
 ```
 
-PostgreSQL und Redis müssen bei einem Start ohne Docker separat erreichbar sein. Lokal wird automatisch `.env.local` mit `config.settings.development` geladen. Für Produktion muss der Prozess `DJANGO_ENV=production` setzen; dann wird `.env.prod` mit `config.settings.production` verwendet. Zugangsdaten aus beiden Dateien dürfen nicht in Git eingecheckt werden.
+Das Angular-Frontend läuft in der Entwicklung über den Proxy auf `http://localhost:4555`. Die API ist unter `http://localhost:8000/api/v1/`, Swagger unter `http://localhost:8000/api/docs/` erreichbar.
 
-Die produktiven Platzhalter in `.env.prod` sind absichtlich nicht startfähig. Django verweigert den Produktionsstart, solange Secrets, Hosts, HTTPS-Origins, Redis-, Datenbank- oder SMTP-Zugangsdaten nicht ersetzt wurden.
+## Demo-Daten erzeugen
+
+In `.env.local` aktivieren:
+
+```env
+DEMO_DATA_RESET_ENABLED=true
+DEMO_DATA_RESET_ALLOW_PRODUCTION=false
+DEMO_OWNER_EMAIL=deine-staff-email@example.com
+DEMO_WORKSPACE_NAME=Carly Managed Demo
+```
+
+Anschließend den reproduzierbaren Datenbankstand erzeugen. Existiert genau ein aktives Staff-Konto, genügt:
+
+```cmd
+python manage.py reset_demo_data
+```
+
+Bei mehreren Staff-Konten wird der Owner ausdrücklich angegeben:
+
+```cmd
+python manage.py reset_demo_data --owner-email "deine-staff-email@example.com"
+```
+
+Der Reset ersetzt ausschließlich den benannten Demo-Workspace dieses Staff-Kontos. Andere Workspaces und Benutzerkonten bleiben erhalten. Persönliche App-Einstellungen und Carly-Zustand des Demo-Owners werden auf den definierten Ausgangsstand gesetzt.
+
+Der gleiche Reset ist für Staff-Konten unter **Einstellungen → Testdaten** verfügbar.
+
+## Nächtlichen Reset einrichten
+
+Geplante Windows-Aufgabe für täglich 02:00 Uhr anlegen:
+
+```cmd
+scripts\install-demo-reset-task.cmd 02:00
+```
+
+Aufgabe sofort testen und Status prüfen:
+
+```cmd
+schtasks /Run /TN "Carly Managed Demo Reset"
+schtasks /Query /TN "Carly Managed Demo Reset" /V /FO LIST
+```
+
+Protokoll:
+
+```text
+logs\demo-reset.log
+```
+
+Geplante Aufgabe entfernen:
+
+```cmd
+scripts\remove-demo-reset-task.cmd
+```
 
 ## Zusätzliche Prozesse
 
-```bash
-celery -A config worker --loglevel=INFO
-celery -A config beat --loglevel=INFO
-daphne -b 0.0.0.0 -p 8000 config.asgi:application
+Celery Worker unter Windows:
+
+```cmd
+python -m celery -A config worker --loglevel=INFO --pool=solo --concurrency=1
+```
+
+Celery Beat:
+
+```cmd
+python -m celery -A config beat --loglevel=INFO
 ```
 
 ## Tests und Qualitätsprüfungen
 
-```bash
+```cmd
 pytest --cov --cov-report=term-missing
 ruff check .
 ruff format --check .
 python manage.py makemigrations --check --dry-run
-python manage.py spectacular --file docs/openapi.yml --validate
+python manage.py spectacular --file docs\openapi.yml --validate
 bandit -q -r apps config -x "*/tests/*,*/migrations/*" -c pyproject.toml
 ```
 
-Der aktuelle CI-Mindestwert für die gesamte Branch-Coverage beträgt 65 Prozent. Kritische Sicherheits- und Autorisierungspfade werden zusätzlich durch Integrationstests abgedeckt.
-
 ## Session-Authentifizierung im Angular-Frontend
 
-1. `GET /api/v1/auth/csrf/` mit `withCredentials: true` aufrufen.
-2. Das Cookie `cm_csrftoken` auslesen.
-3. Bei `POST`, `PUT`, `PATCH` und `DELETE` den Header `X-CSRFToken` mitsenden.
-4. Alle REST- und WebSocket-Aufrufe mit denselben Cookies ausführen.
-5. Keine Sitzungs- oder Anmeldetokens in `localStorage` speichern.
+1. `GET /api/v1/auth/csrf/` setzt das lesbare CSRF-Cookie.
+2. Das HttpOnly-Sitzungscookie wird durch den Browser verwaltet.
+3. Schreibende Requests senden `X-CSRFToken` und `withCredentials: true`.
+4. Der Angular-Entwicklungsproxy leitet `/api`, `/ws` und `/media` an Port 8000 weiter.
+5. Sitzungs- oder Anmeldetokens werden nicht im `localStorage` gespeichert.
 
-Die konkreten Datenverträge und Migrationsschritte stehen unter `docs/` und in `docs/openapi.yml`.
+Weitere Datenverträge und Sicherheitsentscheidungen stehen unter `docs/` und in `docs/openapi.yml`.

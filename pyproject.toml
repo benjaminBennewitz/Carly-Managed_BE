@@ -1,0 +1,82 @@
+# pyproject.toml
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "carly-managed-backend"
+version = "1.1.0"
+description = "Produktionsnahes Django-Backend für Carly Managed."
+readme = "README.md"
+requires-python = ">=3.13,<3.15"
+license = {text = "Proprietary"}
+authors = [{name = "Carly Managed"}]
+dependencies = [
+  "Django==5.2.16",
+  "djangorestframework==3.17.1",
+  "django-cors-headers==4.9.0",
+  "django-environ==0.12.0",
+  "django-filter==25.2",
+  "drf-spectacular==0.30.0",
+  "channels[daphne]==4.3.2",
+  "channels-redis==4.3.0",
+  "celery==5.6.3",
+  "redis==6.4.0",
+  "psycopg[binary]==3.2.12",
+  "argon2-cffi==25.1.0",
+  "Pillow==12.0.0",
+  "filetype==1.2.0",
+  "whitenoise==6.11.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==9.0.2",
+  "pytest-django==4.11.1",
+  "pytest-asyncio==1.3.0",
+  "pytest-cov==7.0.0",
+  "coverage[toml]==7.13.1",
+  "factory-boy==3.3.3",
+  "ruff==0.14.10",
+  "bandit==1.9.2",
+  "pip-audit==2.10.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["apps*", "config*"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.test"
+python_files = ["test_*.py", "*_test.py", "tests.py"]
+addopts = "-ra --strict-markers --strict-config"
+testpaths = ["apps"]
+
+[tool.coverage.run]
+branch = true
+source = ["apps", "config"]
+omit = ["*/migrations/*", "*/tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 65
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+extend-exclude = ["*/migrations/*"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "DJ", "S", "RUF"]
+ignore = ["DJ001", "S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"config/settings/*.py" = ["F403", "F405"]
+"apps/**/tests/*.py" = ["S106", "S105"]
+"apps/**/models.py" = ["RUF012"]
+"apps/**/serializers.py" = ["N802", "N815", "RUF012"]
+"apps/**/views.py" = ["RUF012"]
+
+[tool.bandit]
+exclude_dirs = ["apps/*/tests", "apps/*/migrations"]
+skips = ["B101"]

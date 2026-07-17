@@ -1,68 +1,73 @@
 <!-- tools.md -->
 # Carly Managed Backend: Tools und Befehle
 
-## Virtuelle Umgebung
+Alle Windows-Befehle werden in **CMD** ausgeführt. Nur Memurai wird wie gekennzeichnet über PowerShell geprüft.
 
-### Windows PowerShell
+## Projekt und virtuelle Umgebung
 
-```powershell
+```cmd
+cd /d "C:\Pfad\zu\Carly-Managed_BE"
 py -3.13 -m venv .venv
-.\.venv\Scripts\Activate.ps1
+.venv\Scripts\activate.bat
 python -m pip install --upgrade pip
 python -m pip install -r requirements-dev.txt
 ```
 
-### Linux, WSL oder macOS
+Virtuelle Umgebung verlassen:
 
-```bash
-python3.13 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements-dev.txt
+```cmd
+deactivate
 ```
 
 ## ENV-Dateien
 
-Lokal wird ohne weitere Variable automatisch `.env.local` geladen.
+Lokal wird automatisch `.env.local` geladen:
 
-```powershell
+```cmd
 python manage.py check
 ```
 
-Für Produktion muss die Umgebung vor dem Prozessstart explizit gesetzt werden.
+Produktion im aktuellen CMD-Fenster aktivieren:
 
-```bash
-export DJANGO_ENV=production
+```cmd
+set DJANGO_ENV=production
 python manage.py check --deploy
 ```
 
-Alternativ kann eine konkrete Datei erzwungen werden.
+Variable wieder entfernen:
 
-```bash
-export CARLY_ENV_FILE=.env.prod
-python manage.py check --deploy
+```cmd
+set DJANGO_ENV=
 ```
 
-Sichere Werte erzeugen:
+Sicheren Zufallswert erzeugen:
 
-```bash
+```cmd
 python -c "import secrets; print(secrets.token_urlsafe(64))"
 ```
 
-## PostgreSQL
+## PostgreSQL 16
 
-Datenbank und Benutzer lokal anlegen:
+Konsole als Administrator öffnen:
+
+```cmd
+"C:\Program Files\PostgreSQL\16\bin\psql.exe" -U postgres -h 127.0.0.1 -p 5432 -d postgres
+```
+
+Rolle und Datenbank anlegen:
 
 ```sql
-CREATE DATABASE carly_managed;
-CREATE USER carly_admin WITH PASSWORD '<PASSWORT_AUS_ENV_LOCAL>';
+CREATE ROLE carly_admin WITH LOGIN PASSWORD '<PASSWORT_AUS_ENV_LOCAL>';
+CREATE DATABASE carly_managed OWNER carly_admin ENCODING 'UTF8';
 GRANT ALL PRIVILEGES ON DATABASE carly_managed TO carly_admin;
 ```
 
-PostgreSQL-Konsole öffnen:
+Direkte Verbindung testen:
 
-```bash
-psql -U carly_admin -d carly_managed -h 127.0.0.1
+```cmd
+set "PGPASSWORD=<PASSWORT_AUS_ENV_LOCAL>"
+"C:\Program Files\PostgreSQL\16\bin\psql.exe" -U carly_admin -h 127.0.0.1 -p 5432 -d carly_managed -c "SELECT current_user, current_database(), version();"
+set "PGPASSWORD="
 ```
 
 Wichtige psql-Befehle:
@@ -74,234 +79,145 @@ Wichtige psql-Befehle:
 \q
 ```
 
-## Redis oder Memurai
-
-Für Windows-Entwicklung wird Memurai empfohlen. Dienststatus prüfen:
+## Memurai unter Windows – PowerShell
 
 ```powershell
 sc.exe query memurai
 netstat -ano | findstr :6379
+memurai-cli.exe
 ```
 
-Verbindung testen:
+In der Memurai-Konsole:
 
-```powershell
-memurai-cli.exe
+```text
 AUTH <REDIS_PASSWORD_AUS_ENV_LOCAL>
 PING
 ```
 
-Erwartete Antwort:
+Erwartet wird `PONG`.
 
-```text
-PONG
-```
+## Django und Datenbank
 
-Unter Linux oder WSL:
-
-```bash
-sudo systemctl status redis-server
-sudo systemctl start redis-server
-redis-cli -a '<REDIS_PASSWORD>' ping
-```
-
-## Datenbank und Django
-
-Migrationen erstellen und anwenden:
-
-```bash
-python manage.py makemigrations
+```cmd
+python manage.py check
+python manage.py makemigrations --check --dry-run
 python manage.py migrate
-```
-
-Vor produktiven Migrationen immer ein Datenbank-Backup erstellen.
-
-Administratorkonto anlegen:
-
-```bash
+python manage.py showmigrations
 python manage.py createsuperuser
 ```
 
-Statische Dateien sammeln:
+Statische Dateien:
 
-```bash
+```cmd
 python manage.py collectstatic --noinput
-```
-
-Django-Konfiguration prüfen:
-
-```bash
-python manage.py check
-python manage.py check --deploy --settings=config.settings.production
 ```
 
 ## Server und Hintergrundprozesse
 
-Daphne starten:
+Daphne:
 
-```bash
-daphne -b 127.0.0.1 -p 8000 config.asgi:application
+```cmd
+daphne -b localhost -p 8000 config.asgi:application
 ```
 
-Celery Worker starten:
+Celery Worker unter Windows:
 
-```bash
-python -m celery -A config worker --loglevel=INFO --concurrency=1
-```
-
-Celery Beat starten:
-
-```bash
-python -m celery -A config beat --loglevel=INFO
-```
-
-Für Windows muss der Worker mit Solo-Pool laufen:
-
-```powershell
+```cmd
 python -m celery -A config worker --loglevel=INFO --pool=solo --concurrency=1
 ```
 
-## Docker Compose
+Celery Beat:
 
-Lokale Umgebung starten:
-
-```bash
-docker compose --env-file .env.local up --build
+```cmd
+python -m celery -A config beat --loglevel=INFO
 ```
 
-Produktive ENV-Konfiguration verwenden:
+## Demo-Daten
 
-```bash
-docker compose --env-file .env.prod up --build -d
+Einmaligen Ausgangsstand bei genau einem aktiven Staff-Konto erzeugen:
+
+```cmd
+python manage.py reset_demo_data
 ```
 
-Containerstatus und Logs:
+Bei mehreren Staff-Konten den Owner angeben:
 
-```bash
-docker compose ps
-docker compose logs -f api
-docker compose logs -f worker
-docker compose logs -f beat
+```cmd
+python manage.py reset_demo_data --owner-email "deine-staff-email@example.com"
 ```
 
-Container stoppen:
+Alternativ `DEMO_OWNER_EMAIL` in `.env.local` setzen:
 
-```bash
-docker compose down
+```cmd
+scripts\reset-demo-data.cmd
 ```
 
-Datenvolumes zusätzlich löschen:
+Nächtliche Windows-Aufgabe um 02:00 Uhr installieren:
 
-```bash
-docker compose down -v
+```cmd
+scripts\install-demo-reset-task.cmd 02:00
+```
+
+Aufgabe sofort ausführen:
+
+```cmd
+schtasks /Run /TN "Carly Managed Demo Reset"
+```
+
+Status anzeigen:
+
+```cmd
+schtasks /Query /TN "Carly Managed Demo Reset" /V /FO LIST
+```
+
+Logdatei anzeigen:
+
+```cmd
+type logs\demo-reset.log
+```
+
+Geplante Aufgabe entfernen:
+
+```cmd
+scripts\remove-demo-reset-task.cmd
 ```
 
 ## Tests und Qualität
 
-Vollständige Tests mit Branch-Coverage:
-
-```bash
+```cmd
 pytest --cov --cov-report=term-missing
-```
-
-Formatierung prüfen oder anwenden:
-
-```bash
-ruff format --check .
-ruff format .
-```
-
-Linting:
-
-```bash
 ruff check .
-ruff check . --fix
-```
-
-Migrationen auf fehlende Änderungen prüfen:
-
-```bash
+ruff format --check .
 python manage.py makemigrations --check --dry-run
-```
-
-OpenAPI neu erzeugen und validieren:
-
-```bash
-python manage.py spectacular --file docs/openapi.yml --validate
-```
-
-Security-Prüfungen:
-
-```bash
+python manage.py spectacular --file docs\openapi.yml --validate
 bandit -q -r apps config -x "*/tests/*,*/migrations/*" -c pyproject.toml
-pip-audit -r requirements.txt
 ```
 
 ## API-Schnelltests
 
-Health-Endpunkt:
-
-```bash
-curl -i http://127.0.0.1:8000/api/v1/health/
+```cmd
+curl -i http://localhost:8000/api/v1/health/
 ```
-
-Swagger UI:
 
 ```text
-http://127.0.0.1:8000/api/docs/
+Swagger: http://localhost:8000/api/docs/
+Admin:   http://localhost:8000/admin/
+Frontend: http://localhost:4555/
 ```
 
-Admin:
+## Docker Compose
 
-```text
-http://127.0.0.1:8000/admin/
+```cmd
+docker compose --env-file .env.local up --build
+docker compose ps
+docker compose logs -f api
+docker compose down
 ```
-
-## Systemd: Produktion
-
-API-Service öffnen:
-
-```bash
-sudo nano /etc/systemd/system/carly-managed-api.service
-```
-
-Wichtige Service-Werte:
-
-```ini
-[Service]
-WorkingDirectory=/home/users/carly-managed-backend
-Environment=DJANGO_ENV=production
-ExecStart=/home/users/carly-managed-backend/.venv/bin/daphne -b 127.0.0.1 -p 8000 config.asgi:application
-Restart=always
-```
-
-Service aktivieren und prüfen:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now carly-managed-api
-sudo systemctl restart carly-managed-api
-sudo systemctl status carly-managed-api
-journalctl -u carly-managed-api -n 100 --no-pager
-```
-
-Für Worker und Beat sollten separate Services mit denselben ENV- und Arbeitsverzeichniswerten angelegt werden.
-
-## Abhängigkeiten aktualisieren
-
-Installierte Versionen anzeigen:
-
-```bash
-python -m pip list --outdated
-```
-
-`requirements.txt` und `pyproject.toml` müssen bei Versionsänderungen gemeinsam aktualisiert werden. Kein ungeprüftes `pip freeze` über die Projektdateien schreiben.
 
 ## Git
 
-Lokalen Stand auf den Remote-Stand zurücksetzen:
-
-```bash
-git fetch origin
-git reset --hard origin/main
+```cmd
+git status
+git log --oneline --decorate --graph
+git push
 ```

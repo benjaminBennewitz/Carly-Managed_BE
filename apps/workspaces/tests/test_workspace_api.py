@@ -235,3 +235,42 @@ def test_subtask_assignment_creates_personal_mirror_for_member() -> None:
     assert response.status_code == 201
     subtask = task.subtasks.get()
     assert Task.objects.filter(source_subtask=subtask, assignee=member).exists()
+
+
+def test_workspace_manager_can_remove_regular_member() -> None:
+    """Deaktiviert Mitgliedschaft und Projektzugriffe ohne Nutzerkonto zu löschen."""
+    owner = create_user("owner-remove@example.test", "Owner")
+    member = create_user("member-remove@example.test", "Member")
+    workspace = owner.owned_workspaces.get()
+    membership = WorkspaceMembership.objects.create(
+        workspace=workspace,
+        user=member,
+        role="member",
+        avatar_color="#6558d3",
+    )
+
+    response = auth_client(owner).delete(
+        reverse("workspace-members", args=[workspace.id]),
+        {"memberId": str(member.id)},
+        format="json",
+    )
+
+    assert response.status_code == 204
+    membership.refresh_from_db()
+    assert membership.is_active is False
+    assert User.objects.filter(pk=member.pk).exists() is True
+
+
+def test_workspace_owner_cannot_remove_self() -> None:
+    """Schützt den einzigen Workspace-Owner vor versehentlicher Selbstentfernung."""
+    owner = create_user("owner-self@example.test", "Owner")
+    workspace = owner.owned_workspaces.get()
+
+    response = auth_client(owner).delete(
+        reverse("workspace-members", args=[workspace.id]),
+        {"memberId": str(owner.id)},
+        format="json",
+    )
+
+    assert response.status_code == 409
+    assert WorkspaceMembership.objects.get(workspace=workspace, user=owner).is_active is True
