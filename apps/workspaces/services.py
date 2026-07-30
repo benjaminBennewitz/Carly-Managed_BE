@@ -16,6 +16,7 @@ from rest_framework.exceptions import ValidationError
 
 from apps.accounts.models import User
 from apps.common.exceptions import ConflictError, VersionConflictError
+from apps.preferences.rewards import award_carly_reward_safely, reward_task_completion_safely
 from apps.workspaces.choices import (
     AutomationTrigger,
     BoardKind,
@@ -165,6 +166,14 @@ def create_project(
         ]
     )
     _broadcast_board(board.id, "project.created", {"projectId": str(project.id)})
+    award_carly_reward_safely(
+        user=actor,
+        event_type="project_created",
+        event_key=f"project-created:{project.id}",
+        source_type="project",
+        source_id=str(project.id),
+        message=f"„{project.name}“ ist angelegt. Ein guter Anfang.",
+    )
     return project
 
 
@@ -182,6 +191,30 @@ def update_project(
     manager_users = validated_data.pop("manager_users", None)
     collaborator_users = validated_data.pop("collaborator_users", None)
     is_pinned = validated_data.pop("is_pinned_input", None)
+    meaningful_change = any(
+        getattr(locked, field) != value for field, value in validated_data.items()
+    )
+    if manager_users is not None:
+        current_manager_ids = set(
+            locked.participants.filter(role=ProjectRole.MANAGER).values_list("user_id", flat=True)
+        )
+        desired_manager_ids = {user.id for user in manager_users if user.id != locked.owner_id}
+        meaningful_change = meaningful_change or current_manager_ids != desired_manager_ids
+    if collaborator_users is not None:
+        current_collaborator_ids = set(
+            locked.participants.filter(role=ProjectRole.COLLABORATOR).values_list(
+                "user_id", flat=True
+            )
+        )
+        desired_collaborator_ids = {
+            user.id
+            for user in collaborator_users
+            if user.id != locked.owner_id
+            and (manager_users is None or user.id not in {manager.id for manager in manager_users})
+        }
+        meaningful_change = meaningful_change or (
+            current_collaborator_ids != desired_collaborator_ids
+        )
     for field, value in validated_data.items():
         setattr(locked, field, value)
     if "name" in validated_data and locked.board.title != locked.name:
@@ -238,6 +271,15 @@ def update_project(
     _broadcast_board(
         locked.board.id, "project.updated", {"projectId": str(locked.id), "version": locked.version}
     )
+    if meaningful_change:
+        bucket = int(timezone.now().timestamp() // 300)
+        award_carly_reward_safely(
+            user=actor,
+            event_type="project_updated",
+            event_key=f"project-updated:{locked.id}:{bucket}",
+            source_type="project",
+            source_id=str(locked.id),
+        )
     return locked
 
 
@@ -249,6 +291,7 @@ def set_project_status(
     locked = Project.objects.select_for_update().select_related("board").get(pk=project.pk)
     assert_version(locked, supplied_version)
     now = timezone.now()
+    previous_status = locked.status
     locked.status = status_value
     if status_value == ProjectStatus.COMPLETED:
         locked.completed_at = now
@@ -265,6 +308,15 @@ def set_project_status(
         "project.status_changed",
         {"projectId": str(locked.id), "status": locked.status, "version": locked.version},
     )
+    if status_value == ProjectStatus.COMPLETED and previous_status != ProjectStatus.COMPLETED:
+        award_carly_reward_safely(
+            user=actor,
+            event_type="project_completed",
+            event_key=f"project-completed:{locked.id}",
+            source_type="project",
+            source_id=str(locked.id),
+            message=f"„{locked.name}“ ist abgeschlossen. Das war echte Arbeit.",
+        )
     return locked
 
 
@@ -298,6 +350,13 @@ def create_task(
         "task.created",
         {"taskId": str(task.id), "columnId": str(task.column_id), "version": task.version},
     )
+    award_carly_reward_safely(
+        user=actor,
+        event_type="task_created",
+        event_key=f"task-created:{task.id}",
+        source_type="task",
+        source_id=str(task.id),
+    )
     return task
 
 
@@ -315,6 +374,15 @@ def update_task(
     old_assignee_id = locked.assignee_id
     collaborators = validated_data.pop("collaborators", None)
     target_column = validated_data.pop("column", None)
+    meaningful_change = any(
+        getattr(locked, field) != value for field, value in validated_data.items()
+    )
+    if collaborators is not None:
+        current_collaborators = set(locked.collaborators.values_list("id", flat=True))
+        desired_collaborators = {user.id for user in collaborators}
+        meaningful_change = meaningful_change or current_collaborators != desired_collaborators
+    if target_column is not None and target_column.id != locked.column_id:
+        meaningful_change = True
     for field, value in validated_data.items():
         setattr(locked, field, value)
     if target_column is not None and target_column.id != locked.column_id:
@@ -333,6 +401,15 @@ def update_task(
     _broadcast_board(
         locked.board_id, "task.updated", {"taskId": str(locked.id), "version": locked.version}
     )
+    if meaningful_change:
+        bucket = int(timezone.now().timestamp() // 300)
+        award_carly_reward_safely(
+            user=actor,
+            event_type="task_updated",
+            event_key=f"task-updated:{locked.id}:{bucket}",
+            source_type="task",
+            source_id=str(locked.id),
+        )
     return locked
 
 
@@ -392,6 +469,14 @@ def move_task(
             "version": locked.version,
         },
     )
+    bucket = int(timezone.now().timestamp() // 600)
+    award_carly_reward_safely(
+        user=actor,
+        event_type="task_moved",
+        event_key=f"task-moved:{locked.id}:{bucket}",
+        source_type="task",
+        source_id=str(locked.id),
+    )
     return locked
 
 
@@ -400,6 +485,7 @@ def set_task_completed(*, task: Task, actor: User, completed: bool, supplied_ver
     """Schließt oder öffnet einen Task und synchronisiert Spiegelungen."""
     locked = Task.objects.select_for_update().get(pk=task.pk)
     assert_version(locked, supplied_version)
+    was_completed = locked.is_done
     locked.is_done = completed
     locked.completed_at = timezone.now() if completed else None
     increment_version(locked)
@@ -419,6 +505,17 @@ def set_task_completed(*, task: Task, actor: User, completed: bool, supplied_ver
         "task.completed" if completed else "task.reopened",
         {"taskId": str(locked.id), "version": locked.version},
     )
+    if completed and not was_completed:
+        if locked.source_subtask_id:
+            award_carly_reward_safely(
+                user=actor,
+                event_type="subtask_completed",
+                event_key=f"subtask-completed:{locked.source_subtask_id}",
+                source_type="subtask",
+                source_id=str(locked.source_subtask_id),
+            )
+        else:
+            reward_task_completion_safely(user=actor, task=locked)
     return locked
 
 
@@ -531,6 +628,7 @@ def update_subtask(
     """Aktualisiert Unteraufgabe und vorhandene persönliche Spiegelung."""
     locked = Subtask.objects.select_for_update().select_related("task").get(pk=subtask.pk)
     assert_version(locked, supplied_version)
+    was_done = locked.is_done
     if title is not None:
         locked.title = title
     if assignee is not ...:
@@ -564,6 +662,14 @@ def update_subtask(
         "subtask.updated",
         {"taskId": str(locked.task_id), "subtaskId": str(locked.id), "version": locked.version},
     )
+    if locked.is_done and not was_done:
+        award_carly_reward_safely(
+            user=actor,
+            event_type="subtask_completed",
+            event_key=f"subtask-completed:{locked.id}",
+            source_type="subtask",
+            source_id=str(locked.id),
+        )
     return locked
 
 

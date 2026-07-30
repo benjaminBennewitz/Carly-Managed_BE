@@ -4,11 +4,12 @@
 from typing import Any
 
 from django.db import transaction
+from django.utils.dateparse import parse_datetime
 from drf_spectacular.utils import extend_schema
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.preferences.models import CarlyState, UserSettings
+from apps.preferences.models import CarlyRewardLog, UserSettings
 from apps.preferences.serializers import (
     AppSettingsSerializer,
     AppSettingsWriteSerializer,
@@ -16,9 +17,15 @@ from apps.preferences.serializers import (
     CarlySettingsWriteSerializer,
     CarlyStateSerializer,
 )
+from apps.preferences.rewards import (
+    daily_reward_summary,
+    get_reward_rules_payload,
+    serialize_reward_log,
+)
 from apps.preferences.services import (
     bootstrap_preferences,
     perform_carly_action,
+    reset_carly_settings,
     update_carly_settings,
     update_settings,
 )
@@ -71,10 +78,9 @@ class CarlyStateView(APIView):
 
     @extend_schema(responses={200: CarlyStateSerializer})
     def delete(self, request: Any) -> Response:
-        """Setzt Carly zurück, ohne andere Kontodaten zu verändern."""
-        with transaction.atomic():
-            CarlyState.objects.filter(user=request.user).delete()
-            _, carly = bootstrap_preferences(user=request.user)
+        """Setzt nur Carlys UI-Einstellungen zurück und bewahrt Economy sowie Fortschritt."""
+        bootstrap_preferences(user=request.user)
+        carly = reset_carly_settings(user=request.user)
         return Response(CarlyStateSerializer(carly).data)
 
 
@@ -94,3 +100,39 @@ class CarlyActionView(APIView):
             food=serializer.validated_data.get("food"),
         )
         return Response(CarlyStateSerializer(carly).data)
+
+
+class CarlyRewardRulesView(APIView):
+    """Liefert transparente serverseitige Reward- und Futterregeln."""
+
+    def get(self, request: Any) -> Response:
+        """Liefert Regeln sowie den aktuellen Tagesfortschritt."""
+        bootstrap_preferences(user=request.user)
+        payload = get_reward_rules_payload()
+        payload["today"] = daily_reward_summary(request.user)
+        return Response(payload)
+
+
+class CarlyRewardHistoryView(APIView):
+    """Liefert die letzten servergeprüften Carly-Belohnungen des Nutzers."""
+
+    def get(self, request: Any) -> Response:
+        """Filtert optional ab einem ISO-Zeitpunkt und begrenzt die Ergebniszahl."""
+        bootstrap_preferences(user=request.user)
+        try:
+            limit = max(1, min(50, int(request.query_params.get("limit", 20))))
+        except (TypeError, ValueError):
+            limit = 20
+        queryset = CarlyRewardLog.objects.filter(user=request.user)
+        after_raw = request.query_params.get("after")
+        if after_raw:
+            after = parse_datetime(after_raw)
+            if after is not None:
+                queryset = queryset.filter(created_at__gt=after)
+        rewards = list(queryset.order_by("-created_at")[:limit])
+        return Response(
+            {
+                "items": [serialize_reward_log(item) for item in rewards],
+                "today": daily_reward_summary(request.user),
+            }
+        )

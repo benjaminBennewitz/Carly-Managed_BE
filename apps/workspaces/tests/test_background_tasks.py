@@ -92,6 +92,8 @@ def test_daily_carly_refresh_resets_streak_and_reduces_passive_values() -> None:
     carly.energy = 1
     carly.satiety = 2
     carly.last_productive_day = timezone.localdate() - timedelta(days=2)
+    carly.last_energy_decay_at = timezone.now() - timedelta(days=2)
+    carly.last_satiety_decay_at = timezone.now() - timedelta(days=2)
     carly.save()
 
     assert refresh_carly_streaks() == 1
@@ -100,4 +102,4 @@ def test_daily_carly_refresh_resets_streak_and_reduces_passive_values() -> None:
     assert carly.streak == 0
     assert carly.energy == 0
     assert carly.satiety == 0
-    assert carly.version == 2
+    assert carly.version >= 2

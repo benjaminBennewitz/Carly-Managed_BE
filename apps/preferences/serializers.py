@@ -12,6 +12,7 @@ from apps.preferences.models import (
     ColorVisionMode,
     UserSettings,
 )
+from apps.preferences.rewards import daily_reward_summary, level_state
 
 
 class AccessibilitySettingsSerializer(serializers.Serializer[dict[str, Any]]):
@@ -119,6 +120,9 @@ class CarlySettingsWriteSerializer(serializers.Serializer[dict[str, Any]]):
     taskReactionsEnabled = serializers.BooleanField(required=False)
     autoSleep = serializers.BooleanField(required=False)
     reduceAnimations = serializers.BooleanField(required=False)
+    rewardPopupsEnabled = serializers.BooleanField(required=False)
+    showXpRewards = serializers.BooleanField(required=False)
+    showCreditRewards = serializers.BooleanField(required=False)
     positionX = serializers.FloatField(min_value=0.0, max_value=1.0, required=False)
     version = serializers.IntegerField(min_value=1)
 
@@ -128,10 +132,12 @@ class CarlyStateSerializer(serializers.ModelSerializer[CarlyState]):
 
     settings = serializers.SerializerMethodField()
     progress = serializers.SerializerMethodField()
+    reward = serializers.SerializerMethodField()
+    effect = serializers.SerializerMethodField()
 
     class Meta:
         model = CarlyState
-        fields = ("settings", "progress", "version")
+        fields = ("settings", "progress", "reward", "effect", "version")
 
     def get_settings(self, obj: CarlyState) -> dict[str, Any]:
         """Bündelt die optionalen Carly-Funktionen."""
@@ -142,13 +148,21 @@ class CarlyStateSerializer(serializers.ModelSerializer[CarlyState]):
             "taskReactionsEnabled": obj.task_reactions_enabled,
             "autoSleep": obj.auto_sleep,
             "reduceAnimations": obj.reduce_animations,
+            "rewardPopupsEnabled": obj.reward_popups_enabled,
+            "showXpRewards": obj.show_xp_rewards,
+            "showCreditRewards": obj.show_credit_rewards,
         }
 
     def get_progress(self, obj: CarlyState) -> dict[str, Any]:
-        """Gibt serverkontrollierte Fortschrittswerte aus."""
+        """Gibt serverkontrollierte Fortschritts-, Inventar- und Economy-Werte aus."""
+        level, level_xp, next_level_xp = level_state(obj.experience)
         return {
-            "level": obj.level,
+            "level": level,
             "experience": obj.experience,
+            "levelExperience": level_xp,
+            "nextLevelExperience": next_level_xp,
+            "credits": obj.credits,
+            "inventory": obj.inventory,
             "affection": obj.affection,
             "energy": obj.energy,
             "satiety": obj.satiety,
@@ -157,7 +171,20 @@ class CarlyStateSerializer(serializers.ModelSerializer[CarlyState]):
             "isSleeping": obj.is_sleeping,
             "lastMessage": obj.last_message,
             "positionX": obj.position_x,
+            "auraUntil": obj.aura_until.isoformat() if obj.aura_until else None,
+            "moonUntil": obj.moon_until.isoformat() if obj.moon_until else None,
+            "dailyRewards": daily_reward_summary(obj.user),
         }
+
+    def get_reward(self, obj: CarlyState) -> dict[str, Any] | None:
+        """Liefert den Reward der gerade ausgeführten Aktion, sofern vorhanden."""
+        reward = getattr(obj, "_reward_result", None)
+        return reward.as_api_dict() if reward else None
+
+    def get_effect(self, obj: CarlyState) -> str | None:
+        """Liefert einen unmittelbar auszulösenden Food-Effekt."""
+        effect = getattr(obj, "_special_effect", None)
+        return effect if effect and effect != "none" else None
 
 
 class CarlyActionSerializer(serializers.Serializer[dict[str, Any]]):

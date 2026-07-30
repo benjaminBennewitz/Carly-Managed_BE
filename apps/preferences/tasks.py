@@ -1,33 +1,29 @@
 # apps/preferences/tasks.py
-"""Pflegt zeitabhängige Carly-Zustände in einem täglichen Hintergrundlauf."""
+"""Pflegt Carlys zeitabhängigen Zustand in einem täglichen Hintergrundlauf."""
 
 from celery import shared_task
 from django.utils import timezone
 
 from apps.preferences.models import CarlyState
+from apps.preferences.rewards import apply_carly_decay
 
 
 @shared_task
 def refresh_carly_streaks() -> int:
-    """Setzt unterbrochene Streaks zurück und reduziert passive Werte moderat."""
+    """Setzt unterbrochene Streaks zurück und synchronisiert den zeitbasierten Decay."""
     today = timezone.localdate()
     changed = 0
     for carly in CarlyState.objects.iterator(chunk_size=500):
-        fields = []
-        if (
+        decay_changed = apply_carly_decay(carly)
+        streak_changed = bool(
             carly.last_productive_day
             and (today - carly.last_productive_day).days > 1
             and carly.streak
-        ):
+        )
+        if streak_changed:
             carly.streak = 0
-            fields.append("streak")
-        if not carly.is_sleeping:
-            carly.energy = max(0, carly.energy - 2)
-            carly.satiety = max(0, carly.satiety - 3)
-            fields.extend(("energy", "satiety"))
-        if fields:
             carly.version += 1
-            fields.extend(("version", "updated_at"))
-            carly.save(update_fields=tuple(set(fields)))
+            carly.save(update_fields=("streak", "version", "updated_at"))
+        if decay_changed or streak_changed:
             changed += 1
     return changed

@@ -20,6 +20,7 @@ from rest_framework.views import APIView
 from apps.accounts.models import User
 from apps.common.exceptions import ConflictError
 from apps.common.throttles import SearchRateThrottle, UploadRateThrottle
+from apps.preferences.rewards import award_carly_reward_safely
 from apps.common.validators import validate_upload
 from apps.workspaces.choices import ProjectStatus, WorkspaceRole
 from apps.workspaces.models import (
@@ -663,6 +664,21 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
                 comment_kwargs["id"] = serializer.validated_data["id"]
             comment = TaskComment.objects.create(**comment_kwargs)
             comment.mentions.set(mentions)
+            award_carly_reward_safely(
+                user=request.user,
+                event_type="comment_created",
+                event_key=f"comment-created:{comment.id}",
+                source_type="comment",
+                source_id=str(comment.id),
+            )
+            if any(user.id != request.user.id for user in mentions):
+                award_carly_reward_safely(
+                    user=request.user,
+                    event_type="mention_created",
+                    event_key=f"mention-created:{comment.id}",
+                    source_type="comment",
+                    source_id=str(comment.id),
+                )
             return Response(
                 CommentSerializer(comment, context=_serializer_context(self)).data,
                 status=status.HTTP_201_CREATED,

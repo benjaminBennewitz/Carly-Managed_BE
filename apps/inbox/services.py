@@ -2,6 +2,7 @@
 """Kapselt Nachrichtenerstellung und persönliche Benachrichtigungen."""
 
 from collections.abc import Iterable
+from datetime import timedelta
 from typing import Any
 
 from django.db import transaction
@@ -10,6 +11,7 @@ from rest_framework.exceptions import ValidationError
 
 from apps.accounts.models import User
 from apps.inbox.models import ChatMessage, Conversation, ConversationParticipant, SystemNotification
+from apps.preferences.rewards import award_carly_reward_safely
 from apps.workspaces.models import Workspace, WorkspaceMembership
 
 
@@ -81,9 +83,22 @@ def create_conversation(
             for user in unique_users.values()
         ]
     )
-    ChatMessage.objects.create(
+    repeated_recently = ChatMessage.objects.filter(
+        sender=creator,
+        body=body,
+        created_at__gte=timezone.now() - timedelta(minutes=2),
+    ).exists()
+    message = ChatMessage.objects.create(
         conversation=conversation, sender=creator, subject=subject, body=body
     )
+    if not repeated_recently:
+        award_carly_reward_safely(
+            user=creator,
+            event_type="message_sent",
+            event_key=f"message-sent:{message.id}",
+            source_type="message",
+            source_id=str(message.id),
+        )
     _broadcast_inbox(unique_users, "conversation.created", {"conversationId": str(conversation.id)})
     return conversation
 
@@ -117,4 +132,17 @@ def send_message(
             "version": conversation.version,
         },
     )
+    repeated_recently = ChatMessage.objects.filter(
+        sender=sender,
+        body=body,
+        created_at__gte=timezone.now() - timedelta(minutes=2),
+    ).exclude(pk=message.pk).exists()
+    if not repeated_recently:
+        award_carly_reward_safely(
+            user=sender,
+            event_type="message_sent",
+            event_key=f"message-sent:{message.id}",
+            source_type="message",
+            source_id=str(message.id),
+        )
     return message

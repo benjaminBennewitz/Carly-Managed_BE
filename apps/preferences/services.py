@@ -11,6 +11,12 @@ from rest_framework.exceptions import Throttled, ValidationError
 from apps.accounts.models import User
 from apps.common.exceptions import VersionConflictError
 from apps.preferences.models import CarlyActionLog, CarlyMood, CarlyState, UserSettings
+from apps.preferences.rewards import (
+    FOOD_RULES,
+    apply_carly_decay,
+    award_carly_reward,
+    synchronize_level,
+)
 from apps.workspaces.models import Workspace
 
 ACTION_RULES = {
@@ -20,17 +26,17 @@ ACTION_RULES = {
         "affection": 2,
         "energy": 0,
         "satiety": 0,
-        "xp": 1,
+        "xp": 5,
         "message": "Carly schnurrt zufrieden.",
     },
     "feed": {
-        "cooldown": 60,
-        "daily": 8,
-        "affection": 1,
-        "energy": 2,
-        "satiety": 14,
+        "cooldown": 20,
+        "daily": 12,
+        "affection": 0,
+        "energy": 0,
+        "satiety": 0,
         "xp": 2,
-        "message": "Carly ist wieder satt.",
+        "message": "Carly kaut mit bemerkenswertem Ernst.",
     },
     "play": {
         "cooldown": 90,
@@ -38,7 +44,7 @@ ACTION_RULES = {
         "affection": 3,
         "energy": -8,
         "satiety": -2,
-        "xp": 3,
+        "xp": 8,
         "message": "Carly hatte Spaß.",
     },
     "sleep": {
@@ -54,7 +60,7 @@ ACTION_RULES = {
         "cooldown": 10,
         "daily": 12,
         "affection": 0,
-        "energy": 12,
+        "energy": 0,
         "satiety": -2,
         "xp": 0,
         "message": "Carly ist wieder wach.",
@@ -72,6 +78,7 @@ def bootstrap_preferences(
         defaults={"real_name": user.display_name, "nickname": user.display_name},
     )
     carly, _ = CarlyState.objects.get_or_create(user=user)
+    apply_carly_decay(carly)
     return settings_obj, carly
 
 
@@ -133,6 +140,41 @@ def update_settings(*, user: User, data: dict[str, Any]) -> UserSettings:
 
 
 @transaction.atomic
+def reset_carly_settings(*, user: User) -> CarlyState:
+    """Setzt nur Carlys Anzeigeeinstellungen zurück und bewahrt Economy und Fortschritt."""
+    carly = CarlyState.objects.select_for_update().get(user=user)
+    apply_carly_decay(carly)
+    carly.enabled = True
+    carly.show_globally = True
+    carly.messages_enabled = True
+    carly.task_reactions_enabled = True
+    carly.auto_sleep = True
+    carly.reduce_animations = False
+    carly.reward_popups_enabled = True
+    carly.show_xp_rewards = True
+    carly.show_credit_rewards = True
+    carly.position_x = 0.85
+    carly.version += 1
+    carly.save(
+        update_fields=(
+            "enabled",
+            "show_globally",
+            "messages_enabled",
+            "task_reactions_enabled",
+            "auto_sleep",
+            "reduce_animations",
+            "reward_popups_enabled",
+            "show_xp_rewards",
+            "show_credit_rewards",
+            "position_x",
+            "version",
+            "updated_at",
+        )
+    )
+    return carly
+
+
+@transaction.atomic
 def update_carly_settings(*, user: User, data: dict[str, Any]) -> CarlyState:
     """Ändert ausschließlich nutzersteuerbare Carly-Felder."""
     carly = CarlyState.objects.select_for_update().get(user=user)
@@ -144,6 +186,9 @@ def update_carly_settings(*, user: User, data: dict[str, Any]) -> CarlyState:
         "taskReactionsEnabled": "task_reactions_enabled",
         "autoSleep": "auto_sleep",
         "reduceAnimations": "reduce_animations",
+        "rewardPopupsEnabled": "reward_popups_enabled",
+        "showXpRewards": "show_xp_rewards",
+        "showCreditRewards": "show_credit_rewards",
         "positionX": "position_x",
     }
     for key, field in field_map.items():
@@ -171,74 +216,118 @@ def _update_mood(carly: CarlyState) -> None:
 def perform_carly_action(
     *, user: User, action: str, supplied_version: int, food: str | None = None
 ) -> CarlyState:
-    """Führt eine begrenzte Carly-Aktion mit Cooldown und Tageslimit aus."""
+    """Führt Pflege, Füttern und Käufe vollständig serverautoritativ aus."""
+    carly = CarlyState.objects.select_for_update().get(user=user)
+    _assert_version(carly.version, supplied_version)
+    apply_carly_decay(carly)
+    now = timezone.now()
+    today = timezone.localdate()
+
+    if action == "buy-food":
+        if not food or food not in FOOD_RULES:
+            raise ValidationError({"food": "Bitte wähle ein gültiges Futter aus."})
+        food_rule = FOOD_RULES[food]
+        cost = int(food_rule["cost"])
+        if carly.credits < cost:
+            raise ValidationError({"food": "Dafür reichen deine Carly-Credits noch nicht."})
+        inventory = {**carly.inventory}
+        inventory[food] = int(inventory.get(food, 0)) + 1
+        carly.inventory = inventory
+        carly.credits -= cost
+        carly.last_message = f"{food_rule['label']} gekauft. Vorrat: {inventory[food]}."
+        carly.version += 1
+        carly.save()
+        setattr(carly, "_special_effect", "purchase")
+        return carly
+
     rule = ACTION_RULES.get(action)
     if rule is None:
         raise ValidationError("Diese Carly-Aktion ist nicht unterstützt.")
-    carly = CarlyState.objects.select_for_update().get(user=user)
-    _assert_version(carly.version, supplied_version)
-    now = timezone.now()
-    today = timezone.localdate()
     latest = CarlyActionLog.objects.filter(user=user, action=action).order_by("-created_at").first()
     if latest and latest.created_at > now - timedelta(seconds=rule["cooldown"]):
-        wait = (
-            int((latest.created_at + timedelta(seconds=rule["cooldown"]) - now).total_seconds()) + 1
-        )
+        cooldown_ends_at = latest.created_at + timedelta(seconds=rule["cooldown"])
+        wait = int((cooldown_ends_at - now).total_seconds()) + 1
         raise Throttled(wait=wait, detail="Carly braucht kurz Zeit bis zur nächsten Aktion.")
     daily_count = CarlyActionLog.objects.filter(
         user=user, action=action, created_at__date=today
     ).count()
     if daily_count >= rule["daily"]:
         raise Throttled(wait=3600, detail="Das Tageslimit dieser Carly-Aktion ist erreicht.")
+
+    special_effect = "none"
     if action == "sleep":
         carly.is_sleeping = True
+        carly.last_energy_decay_at = now
     elif action == "wake":
         carly.is_sleeping = False
+        carly.last_energy_decay_at = now
     elif carly.is_sleeping:
         raise ValidationError("Carly schläft gerade. Wecke sie zuerst.")
-    if action == "feed" and not food:
-        raise ValidationError({"food": "Bitte wähle ein Futter aus."})
-    carly.affection = max(0, min(100, carly.affection + rule["affection"]))
-    carly.energy = max(0, min(100, carly.energy + rule["energy"]))
-    carly.satiety = max(0, min(100, carly.satiety + rule["satiety"]))
-    carly.experience += rule["xp"]
-    carly.level = 1 + carly.experience // 100
-    carly.last_message = rule["message"]
+
+    if action == "feed":
+        if not food or food not in FOOD_RULES:
+            raise ValidationError({"food": "Bitte wähle ein gültiges Futter aus."})
+        inventory = {**carly.inventory}
+        if int(inventory.get(food, 0)) <= 0:
+            raise ValidationError({"food": "Dieses Futter ist nicht in deinem Inventar."})
+        inventory[food] = int(inventory.get(food, 0)) - 1
+        carly.inventory = inventory
+        food_rule = FOOD_RULES[food]
+        carly.affection = min(100, carly.affection + int(food_rule["affection"]))
+        carly.satiety = min(100, carly.satiety + int(food_rule["satiety"]))
+        if food == "potion":
+            carly.energy = 100
+            carly.aura_until = now + timedelta(seconds=int(food_rule["effectDurationSeconds"]))
+        else:
+            carly.energy = min(100, carly.energy + int(food_rule["energy"]))
+        if food == "fish":
+            carly.moon_until = now + timedelta(seconds=int(food_rule["effectDurationSeconds"]))
+        special_effect = str(food_rule["effect"])
+        carly.last_message = f"{food_rule['label']} – eine akzeptable Wahl."
+    else:
+        carly.affection = max(0, min(100, carly.affection + rule["affection"]))
+        carly.energy = max(0, min(100, carly.energy + rule["energy"]))
+        carly.satiety = max(0, min(100, carly.satiety + rule["satiety"]))
+        carly.last_message = rule["message"]
+
     _update_mood(carly)
     carly.version += 1
     carly.save()
-    CarlyActionLog.objects.create(user=user, action=action, points=rule["xp"])
+    action_log = CarlyActionLog.objects.create(user=user, action=action, points=0)
+
+    reward_result = None
+    if action in {"pet", "play", "feed"}:
+        reward_result = award_carly_reward(
+            user=user,
+            event_type=action,
+            event_key=f"care:{action}:{today.isoformat()}:{daily_count + 1}",
+            source_type="carly",
+            source_id=str(carly.id),
+            message=carly.last_message,
+        )
+        carly.refresh_from_db()
+        action_log.points = reward_result.xp
+        action_log.save(update_fields=("points", "updated_at"))
+
+    synchronize_level(carly)
+    setattr(carly, "_reward_result", reward_result)
+    setattr(carly, "_special_effect", special_effect)
     return carly
 
 
 @transaction.atomic
 def reward_productivity(*, user: User, points: int, message: str) -> CarlyState:
-    """Belohnt echte Produktivität mit serverseitig begrenztem Fortschritt."""
-    carly = CarlyState.objects.select_for_update().get(user=user)
-    today = timezone.localdate()
-    if carly.last_productive_day == today:
-        daily_points = (
-            CarlyActionLog.objects.filter(
-                user=user, action="productivity", created_at__date=today
-            ).aggregate(total=__import__("django.db.models", fromlist=["Sum"]).Sum("points"))[
-                "total"
-            ]
-            or 0
-        )
-        points = max(0, min(points, 50 - daily_points))
-    if points <= 0:
-        return carly
-    if carly.last_productive_day == today - timedelta(days=1):
-        carly.streak += 1
-    elif carly.last_productive_day != today:
-        carly.streak = 1
-    carly.last_productive_day = today
-    carly.experience += points
-    carly.affection = min(100, carly.affection + max(1, points // 5))
-    carly.level = 1 + carly.experience // 100
-    carly.last_message = message[:300]
-    _update_mood(carly)
-    carly.version += 1
-    carly.save()
-    CarlyActionLog.objects.create(user=user, action="productivity", points=points)
+    """Erhält die alte Service-Schnittstelle und nutzt intern das neue Reward-Ledger."""
+    now = timezone.now()
+    result = award_carly_reward(
+        user=user,
+        event_type="task_updated",
+        event_key=f"legacy-productivity:{user.id}:{int(now.timestamp() // 300)}",
+        source_type="legacy",
+        xp=max(0, points),
+        credits=max(0, points * 2),
+        message=message,
+    )
+    carly = CarlyState.objects.get(user=user)
+    setattr(carly, "_reward_result", result)
     return carly

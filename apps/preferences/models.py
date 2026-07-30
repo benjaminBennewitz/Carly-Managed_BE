@@ -3,6 +3,7 @@
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 from apps.common.models import TimeStampedModel, UUIDModel, VersionedModel
 from apps.common.validators import reject_control_characters
@@ -94,6 +95,11 @@ class UserSettings(UUIDModel, TimeStampedModel, VersionedModel):
         return f"Einstellungen: {self.user}"
 
 
+def default_carly_inventory() -> dict[str, int]:
+    """Liefert ein unabhängiges Startinventar für Carly."""
+    return {"fish": 1, "berry": 0, "cookie": 0, "potion": 0}
+
+
 class CarlyMood(models.TextChoices):
     """Spiegelt die im Frontend verwendeten Carly-Stimmungen."""
 
@@ -117,8 +123,13 @@ class CarlyState(UUIDModel, TimeStampedModel, VersionedModel):
     task_reactions_enabled = models.BooleanField(default=True)
     auto_sleep = models.BooleanField(default=True)
     reduce_animations = models.BooleanField(default=False)
+    reward_popups_enabled = models.BooleanField(default=True)
+    show_xp_rewards = models.BooleanField(default=True)
+    show_credit_rewards = models.BooleanField(default=True)
     level = models.PositiveIntegerField(default=1)
     experience = models.PositiveIntegerField(default=0)
+    credits = models.PositiveIntegerField(default=40)
+    inventory = models.JSONField(default=default_carly_inventory)
     affection = models.PositiveSmallIntegerField(default=50)
     energy = models.PositiveSmallIntegerField(default=80)
     satiety = models.PositiveSmallIntegerField(default=70)
@@ -130,6 +141,11 @@ class CarlyState(UUIDModel, TimeStampedModel, VersionedModel):
     )
     position_x = models.FloatField(default=0.85)
     last_productive_day = models.DateField(blank=True, null=True)
+    last_affection_decay_at = models.DateTimeField(default=timezone.now)
+    last_energy_decay_at = models.DateTimeField(default=timezone.now)
+    last_satiety_decay_at = models.DateTimeField(default=timezone.now)
+    aura_until = models.DateTimeField(blank=True, null=True)
+    moon_until = models.DateTimeField(blank=True, null=True)
 
     class Meta:
         constraints = [
@@ -165,3 +181,41 @@ class CarlyActionLog(UUIDModel, TimeStampedModel):
         indexes = [
             models.Index(fields=("user", "action", "created_at"), name="carly_action_limit_idx")
         ]
+
+
+class CarlyRewardLog(UUIDModel, TimeStampedModel):
+    """Protokolliert serverseitig berechnete XP- und Credit-Belohnungen idempotent."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="carly_rewards",
+    )
+    event_type = models.CharField(max_length=40)
+    event_key = models.CharField(max_length=220)
+    source_type = models.CharField(max_length=40, blank=True, default="")
+    source_id = models.CharField(max_length=80, blank=True, default="")
+    xp = models.PositiveSmallIntegerField(default=0)
+    credits = models.PositiveIntegerField(default=0)
+    multiplier = models.DecimalField(max_digits=4, decimal_places=2, default=1)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        constraints = [
+            models.UniqueConstraint(
+                fields=("user", "event_key"),
+                name="carly_reward_event_unique",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=("user", "created_at"), name="carly_reward_user_time_idx"),
+            models.Index(
+                fields=("user", "event_type", "created_at"),
+                name="carly_reward_type_time_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        """Liefert eine kompakte Beschreibung für Administration und Debugging."""
+        return f"{self.user}: {self.event_type} (+{self.xp} XP, +{self.credits} Credits)"

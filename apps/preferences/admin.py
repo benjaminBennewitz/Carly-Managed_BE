@@ -3,7 +3,7 @@
 
 from django.contrib import admin
 
-from apps.preferences.models import CarlyActionLog, CarlyState, UserSettings
+from apps.preferences.models import CarlyActionLog, CarlyRewardLog, CarlyState, UserSettings
 
 
 @admin.register(UserSettings)
@@ -35,5 +35,16 @@ class CarlyActionLogAdmin(admin.ModelAdmin):
     readonly_fields = ("id", "created_at", "updated_at")
     list_display = ("user", "action", "points", "created_at")
     list_filter = ("action",)
-    search_fields = ("user__email", "workspace__name", "action")
+    search_fields = ("user__email", "user__display_name", "action")
+    list_select_related = ("user",)
+
+
+@admin.register(CarlyRewardLog)
+class CarlyRewardLogAdmin(admin.ModelAdmin):
+    """Zeigt das unveränderliche Reward-Ledger für Support und Debugging."""
+
+    readonly_fields = ("id", "created_at", "updated_at")
+    list_display = ("user", "event_type", "xp", "credits", "multiplier", "created_at")
+    list_filter = ("event_type",)
+    search_fields = ("user__email", "user__display_name", "source_id", "event_key")
     list_select_related = ("user",)
