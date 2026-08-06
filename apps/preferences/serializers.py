@@ -173,6 +173,11 @@ class CarlyStateSerializer(serializers.ModelSerializer[CarlyState]):
             "positionX": obj.position_x,
             "auraUntil": obj.aura_until.isoformat() if obj.aura_until else None,
             "moonUntil": obj.moon_until.isoformat() if obj.moon_until else None,
+            "berryFocusUntil": (
+                obj.berry_focus_until.isoformat() if obj.berry_focus_until else None
+            ),
+            "berryFocusCharges": obj.berry_focus_charges,
+            "cookieUntil": obj.cookie_until.isoformat() if obj.cookie_until else None,
             "dailyRewards": daily_reward_summary(obj.user),
         }
 

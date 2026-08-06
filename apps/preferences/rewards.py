@@ -21,6 +21,12 @@ DAILY_XP_SOFT_CAP = 200
 DAILY_XP_HARD_CAP = 300
 DAILY_CREDIT_SOFT_CAP = 500
 DAILY_CREDIT_HARD_CAP = 650
+MOON_XP_BONUS = 3
+BERRY_FOCUS_XP_BONUS = 5
+COOKIE_PROJECT_XP_BONUS = 10
+FULL_ENERGY_XP_BONUS = 3
+COMPLETION_EVENTS = frozenset({"task_completed", "subtask_completed", "project_completed"})
+BERRY_FOCUS_EVENTS = frozenset({"task_completed", "subtask_completed"})
 
 FOOD_RULES: dict[str, dict[str, Any]] = {
     "fish": {
@@ -30,7 +36,8 @@ FOOD_RULES: dict[str, dict[str, Any]] = {
         "affection": 1,
         "energy": 0,
         "effect": "moon",
-        "effectDurationSeconds": 15 * 60,
+        "bonusDurationSeconds": 15 * 60,
+        "visualDurationSeconds": 2,
     },
     "berry": {
         "label": "Mystikbeeren",
@@ -39,7 +46,8 @@ FOOD_RULES: dict[str, dict[str, Any]] = {
         "affection": 3,
         "energy": 0,
         "effect": "berry-dizzy",
-        "effectDurationSeconds": 6,
+        "bonusDurationSeconds": 30 * 60,
+        "visualDurationSeconds": 6,
     },
     "cookie": {
         "label": "Sternenkeks",
@@ -48,7 +56,8 @@ FOOD_RULES: dict[str, dict[str, Any]] = {
         "affection": 7,
         "energy": 1,
         "effect": "cookie-stars",
-        "effectDurationSeconds": 2,
+        "bonusDurationSeconds": 60 * 60,
+        "visualDurationSeconds": 6,
     },
     "potion": {
         "label": "Energietrank",
@@ -57,7 +66,7 @@ FOOD_RULES: dict[str, dict[str, Any]] = {
         "affection": 1,
         "energy": 0,
         "effect": "energy-aura",
-        "effectDurationSeconds": 24 * 60 * 60,
+        "visualDurationSeconds": 3,
     },
 }
 
@@ -175,7 +184,7 @@ def apply_carly_decay(carly: CarlyState, *, now: Any | None = None) -> bool:
         carly.last_satiety_decay_at += timedelta(minutes=45 * satiety_steps)
         changed = True
 
-    energy_interval = timedelta(minutes=12 if carly.is_sleeping else 30)
+    energy_interval = timedelta(hours=1) if carly.is_sleeping else timedelta(minutes=30)
     energy_steps = _whole_steps(current, carly.last_energy_decay_at, energy_interval)
     if energy_steps:
         if carly.is_sleeping:
@@ -286,6 +295,47 @@ def _cap_reward(
     return max(0, min(scaled, remaining))
 
 
+def _active_xp_bonuses(
+    carly: CarlyState,
+    *,
+    event_type: str,
+    now: Any,
+    available_xp: int,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Ermittelt additive Food-Boni innerhalb des verbleibenden Tageslimits."""
+    bonuses: list[dict[str, Any]] = []
+    remaining = max(0, available_xp)
+    consume_berry_focus = False
+
+    def append_bonus(effect: str, amount: int) -> int:
+        """Fügt einen Bonus nur bis zum verbleibenden Hard-Cap hinzu."""
+        nonlocal remaining
+        applied = min(max(0, amount), remaining)
+        if applied:
+            bonuses.append({"effect": effect, "xp": applied})
+            remaining -= applied
+        return applied
+
+    if carly.moon_until and carly.moon_until > now:
+        append_bonus("moon", MOON_XP_BONUS)
+
+    if (
+        event_type in BERRY_FOCUS_EVENTS
+        and carly.berry_focus_charges > 0
+        and carly.berry_focus_until
+        and carly.berry_focus_until > now
+    ):
+        consume_berry_focus = append_bonus("berry-focus", BERRY_FOCUS_XP_BONUS) > 0
+
+    if event_type == "project_completed" and carly.cookie_until and carly.cookie_until > now:
+        append_bonus("cookie-stars", COOKIE_PROJECT_XP_BONUS)
+
+    if event_type in COMPLETION_EVENTS and carly.energy >= 100:
+        append_bonus("full-energy", FULL_ENERGY_XP_BONUS)
+
+    return bonuses, consume_berry_focus
+
+
 @transaction.atomic
 def award_carly_reward(
     *,
@@ -317,7 +367,8 @@ def award_carly_reward(
         )
 
     carly, _ = CarlyState.objects.select_for_update().get_or_create(user=user)
-    apply_carly_decay(carly)
+    now = timezone.now()
+    apply_carly_decay(carly, now=now)
     base_xp = int(rule["xp"] if xp is None else xp)
     base_credits = int(rule["credits"] if credits is None else credits)
     multiplier = _event_multiplier(user, event_type, int((rule or {}).get("fullUntil", 5)))
@@ -328,12 +379,22 @@ def award_carly_reward(
     credit_daily_multiplier = _daily_soft_multiplier(
         credits_today, DAILY_CREDIT_SOFT_CAP, DAILY_CREDIT_HARD_CAP
     )
-    awarded_xp = _cap_reward(
+    base_awarded_xp = _cap_reward(
         base_xp,
         multiplier,
         xp_daily_multiplier,
         DAILY_XP_HARD_CAP - xp_today,
     )
+    xp_bonuses, consume_berry_focus = _active_xp_bonuses(
+        carly,
+        event_type=event_type,
+        now=now,
+        available_xp=DAILY_XP_HARD_CAP - xp_today - base_awarded_xp,
+    )
+    awarded_xp = base_awarded_xp + sum(int(item["xp"]) for item in xp_bonuses)
+    reward_metadata = {**(metadata or {})}
+    if xp_bonuses:
+        reward_metadata["xpBonuses"] = xp_bonuses
     awarded_credits = _cap_reward(
         base_credits,
         multiplier,
@@ -352,7 +413,7 @@ def award_carly_reward(
                 xp=awarded_xp,
                 credits=awarded_credits,
                 multiplier=multiplier,
-                metadata=metadata or {},
+                metadata=reward_metadata,
             )
     except IntegrityError:
         existing = CarlyRewardLog.objects.get(user=user, event_key=event_key)
@@ -367,6 +428,10 @@ def award_carly_reward(
         )
 
     if awarded_xp or awarded_credits:
+        if consume_berry_focus:
+            carly.berry_focus_charges = max(0, carly.berry_focus_charges - 1)
+            if carly.berry_focus_charges == 0:
+                carly.berry_focus_until = None
         carly.experience += awarded_xp
         carly.credits += awarded_credits
         if event_type in PRODUCTIVE_EVENTS:
@@ -501,6 +566,8 @@ def get_reward_rules_payload() -> dict[str, Any]:
                 "satiety": value["satiety"],
                 "affection": value["affection"],
                 "effect": value["effect"],
+                "bonusDurationSeconds": value.get("bonusDurationSeconds"),
+                "visualDurationSeconds": value.get("visualDurationSeconds"),
             }
             for key, value in FOOD_RULES.items()
         ],

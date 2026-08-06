@@ -146,6 +146,9 @@ class CarlyState(UUIDModel, TimeStampedModel, VersionedModel):
     last_satiety_decay_at = models.DateTimeField(default=timezone.now)
     aura_until = models.DateTimeField(blank=True, null=True)
     moon_until = models.DateTimeField(blank=True, null=True)
+    berry_focus_until = models.DateTimeField(blank=True, null=True)
+    berry_focus_charges = models.PositiveSmallIntegerField(default=0)
+    cookie_until = models.DateTimeField(blank=True, null=True)
 
     class Meta:
         constraints = [

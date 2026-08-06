@@ -264,6 +264,9 @@ def perform_carly_action(
     elif carly.is_sleeping:
         raise ValidationError("Carly schläft gerade. Wecke sie zuerst.")
 
+    if action == "play" and carly.energy <= 0:
+        raise ValidationError("Carly hat keine Energie zum Spielen. Lass sie zuerst schlafen.")
+
     if action == "feed":
         if not food or food not in FOOD_RULES:
             raise ValidationError({"food": "Bitte wähle ein gültiges Futter aus."})
@@ -277,11 +280,25 @@ def perform_carly_action(
         carly.satiety = min(100, carly.satiety + int(food_rule["satiety"]))
         if food == "potion":
             carly.energy = 100
-            carly.aura_until = now + timedelta(seconds=int(food_rule["effectDurationSeconds"]))
+            carly.last_energy_decay_at = now
+            carly.aura_until = now + timedelta(
+                seconds=int(food_rule["visualDurationSeconds"])
+            )
         else:
             carly.energy = min(100, carly.energy + int(food_rule["energy"]))
         if food == "fish":
-            carly.moon_until = now + timedelta(seconds=int(food_rule["effectDurationSeconds"]))
+            carly.moon_until = now + timedelta(
+                seconds=int(food_rule["bonusDurationSeconds"])
+            )
+        elif food == "berry":
+            carly.berry_focus_until = now + timedelta(
+                seconds=int(food_rule["bonusDurationSeconds"])
+            )
+            carly.berry_focus_charges = 1
+        elif food == "cookie":
+            carly.cookie_until = now + timedelta(
+                seconds=int(food_rule["bonusDurationSeconds"])
+            )
         special_effect = str(food_rule["effect"])
         carly.last_message = f"{food_rule['label']} – eine akzeptable Wahl."
     else:
