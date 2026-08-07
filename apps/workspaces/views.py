@@ -20,8 +20,8 @@ from rest_framework.views import APIView
 from apps.accounts.models import User
 from apps.common.exceptions import ConflictError
 from apps.common.throttles import SearchRateThrottle, UploadRateThrottle
-from apps.preferences.rewards import award_carly_reward_safely
 from apps.common.validators import validate_upload
+from apps.preferences.rewards import award_carly_reward_safely
 from apps.workspaces.choices import ProjectStatus, WorkspaceRole
 from apps.workspaces.models import (
     AutomationRule,
@@ -98,6 +98,13 @@ from apps.workspaces.services import (
 def _serializer_context(view: Any) -> dict[str, Any]:
     """Liefert einen konsistenten Request-Kontext für verschachtelte URLs."""
     return {"request": view.request, "view": view}
+
+
+def _broadcast_board(board_id: Any, event_type: str, payload: dict[str, Any]) -> None:
+    """Sendet ergänzende ViewSet-Ereignisse erst nach erfolgreichem Commit."""
+    from apps.realtime.events import broadcast_board_event
+
+    transaction.on_commit(lambda: broadcast_board_event(board_id, event_type, payload))
 
 
 class WorkspaceViewSet(viewsets.ReadOnlyModelViewSet[Workspace]):
@@ -324,6 +331,11 @@ class BoardViewSet(viewsets.ReadOnlyModelViewSet[Board]):
             )
             increment_version(locked_board)
             locked_board.save(update_fields=("version", "updated_at"))
+            _broadcast_board(
+                locked_board.id,
+                "column.created",
+                {"columnId": str(column.id), "boardVersion": locked_board.version},
+            )
         return Response(
             BoardColumnSerializer(column, context=_serializer_context(self)).data,
             status=status.HTTP_201_CREATED,
@@ -353,6 +365,11 @@ class BoardViewSet(viewsets.ReadOnlyModelViewSet[Board]):
             BoardColumn.objects.bulk_update(columns, ("position", "updated_at"))
             increment_version(locked_board)
             locked_board.save(update_fields=("version", "updated_at"))
+            _broadcast_board(
+                locked_board.id,
+                "columns.reordered",
+                {"columnIds": [str(value) for value in ids], "version": locked_board.version},
+            )
         refreshed = self.get_queryset().get(pk=board.pk)
         return Response(BoardSerializer(refreshed, context=_serializer_context(self)).data)
 
@@ -388,6 +405,11 @@ class BoardColumnViewSet(
             increment_version(locked)
             locked.full_clean()
             locked.save()
+            _broadcast_board(
+                locked.board_id,
+                "column.updated",
+                {"columnId": str(locked.id), "version": locked.version},
+            )
         return Response(BoardColumnSerializer(locked, context=_serializer_context(self)).data)
 
     def destroy(self, request: Any, *args: Any, **kwargs: Any) -> Response:
@@ -413,6 +435,11 @@ class BoardColumnViewSet(
             BoardColumn.objects.bulk_update(remaining, ("position", "updated_at"))
             increment_version(board)
             board.save(update_fields=("version", "updated_at"))
+            _broadcast_board(
+                board.id,
+                "column.deleted",
+                {"columnId": str(column.id), "version": board.version},
+            )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -503,7 +530,10 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
         with transaction.atomic():
             locked = Task.objects.select_for_update().get(pk=task.pk)
             assert_version(locked, serializer.validated_data["version"])
+            board_id = locked.board_id
+            task_id = str(locked.id)
             locked.delete()
+            _broadcast_board(board_id, "task.deleted", {"taskId": task_id})
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     def _completion_action(self, request: Any, completed: bool) -> Response:
@@ -610,7 +640,13 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
             with transaction.atomic():
                 locked = Subtask.objects.select_for_update().get(pk=subtask.pk)
                 assert_version(locked, serializer.validated_data["version"])
+                subtask_id_value = str(locked.id)
                 locked.delete()
+                _broadcast_board(
+                    task.board_id,
+                    "subtask.deleted",
+                    {"taskId": str(task.id), "subtaskId": subtask_id_value},
+                )
             return Response(status=status.HTTP_204_NO_CONTENT)
         serializer = SubtaskWriteSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -679,6 +715,11 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
                     source_type="comment",
                     source_id=str(comment.id),
                 )
+            _broadcast_board(
+                task.board_id,
+                "comment.created",
+                {"taskId": str(task.id), "commentId": str(comment.id)},
+            )
             return Response(
                 CommentSerializer(comment, context=_serializer_context(self)).data,
                 status=status.HTTP_201_CREATED,
@@ -695,6 +736,11 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
         comment.deleted_at = timezone.now()
         comment.version += 1
         comment.save(update_fields=("deleted_at", "version", "updated_at"))
+        _broadcast_board(
+            task.board_id,
+            "comment.deleted",
+            {"taskId": str(task.id), "commentId": str(comment.id)},
+        )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(
@@ -714,8 +760,14 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
             attachment = task.attachments.filter(pk=attachment_id).first()
             if attachment is None:
                 raise NotFound("Anhang nicht gefunden.")
+            attachment_id_value = str(attachment.id)
             attachment.file.delete(save=False)
             attachment.delete()
+            _broadcast_board(
+                task.board_id,
+                "attachment.deleted",
+                {"taskId": str(task.id), "attachmentId": attachment_id_value},
+            )
             return Response(status=status.HTTP_204_NO_CONTENT)
 
         files = request.FILES.getlist("files")
@@ -733,6 +785,11 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
                 uploaded_by=request.user,
             )
             created.append(attachment)
+        _broadcast_board(
+            task.board_id,
+            "attachment.created",
+            {"taskId": str(task.id), "attachmentIds": [str(item.id) for item in created]},
+        )
         return Response(
             AttachmentSerializer(created, many=True, context=_serializer_context(self)).data,
             status=status.HTTP_201_CREATED,
@@ -756,7 +813,13 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
             with transaction.atomic():
                 locked = TaskRecurrenceRule.objects.select_for_update().get(pk=rule.pk)
                 assert_version(locked, serializer.validated_data["version"])
+                rule_id = str(locked.id)
                 locked.delete()
+                _broadcast_board(
+                    task.board_id,
+                    "recurrence.deleted",
+                    {"taskId": str(task.id), "ruleId": rule_id},
+                )
             return Response(status=status.HTTP_204_NO_CONTENT)
         serializer = RecurrenceRuleSerializer(
             rule, data=request.data, partial=rule is not None, context=_serializer_context(self)

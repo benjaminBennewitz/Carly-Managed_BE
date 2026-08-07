@@ -78,6 +78,11 @@ async def test_board_socket_validates_and_broadcasts_events() -> None:
 
     connected, _ = await communicator.connect()
     assert connected is True
+    snapshot = await communicator.receive_json_from()
+    assert snapshot["type"] == "presence.snapshot"
+    assert [member["id"] for member in snapshot["payload"]["users"]] == [str(user.id)]
+    assert snapshot["payload"]["users"][0]["isOnline"] is True
+    assert snapshot["payload"]["editing"] == []
     joined = await communicator.receive_json_from()
     assert joined["type"] == "presence.joined"
     assert joined["payload"]["user"]["id"] == str(user.id)

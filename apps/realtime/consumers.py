@@ -2,6 +2,7 @@
 """Validiert und verteilt flüchtige Board- und Inbox-Ereignisse."""
 
 import math
+import time
 from typing import Any
 
 from channels.db import database_sync_to_async
@@ -14,6 +15,8 @@ from apps.realtime.rate_limit import TokenBucket
 
 class BoardConsumer(AsyncJsonWebsocketConsumer):
     """Überträgt Presence, Cursor, Bearbeitung und kooperative Aktionen."""
+
+    PRESENCE_TTL_SECONDS = 90
 
     async def connect(self) -> None:
         """Akzeptiert die Verbindung nur bei authentifiziertem Board-Zugriff."""
@@ -30,30 +33,43 @@ class BoardConsumer(AsyncJsonWebsocketConsumer):
         self.cursor_bucket = TokenBucket(capacity=30, refill_per_second=20)
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
-        member = await self._member_payload(str(user.id), self.board_id)
-        await self.channel_layer.group_send(
-            self.group_name,
+        user_id = str(user.id)
+        is_first_connection, online_user_ids, editing = await self._presence_join(user_id)
+        members = await self._member_payloads(online_user_ids, self.board_id)
+        await self.send_json(
             {
-                "type": "board.event",
-                "eventType": "presence.joined",
-                "payload": {"user": member},
-            },
+                "type": "presence.snapshot",
+                "payload": {"users": members, "editing": editing},
+            }
         )
+        if is_first_connection:
+            member = await self._member_payload(user_id, self.board_id)
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "board.event",
+                    "eventType": "presence.joined",
+                    "payload": {"user": member},
+                },
+            )
 
     async def disconnect(self, close_code: int) -> None:
         """Meldet den Nutzer ab und entfernt die Gruppenmitgliedschaft."""
         if not hasattr(self, "group_name"):
             return
         user = self.scope["user"]
+        user_id = str(user.id)
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
-        await self.channel_layer.group_send(
-            self.group_name,
-            {
-                "type": "board.event",
-                "eventType": "presence.left",
-                "payload": {"userId": str(user.id)},
-            },
-        )
+        is_offline = await self._presence_leave(user_id)
+        if is_offline:
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "board.event",
+                    "eventType": "presence.left",
+                    "payload": {"userId": user_id},
+                },
+            )
 
     async def receive_json(self, content: Any, **kwargs: Any) -> None:
         """Akzeptiert nur bekannte, größenbegrenzte Ereignistypen."""
@@ -64,6 +80,7 @@ class BoardConsumer(AsyncJsonWebsocketConsumer):
             return
         event_type = content.get("type")
         if event_type == "heartbeat":
+            await self._presence_touch(str(self.scope["user"].id))
             await self.send_json({"type": "heartbeat.ack"})
             return
         if event_type == "cursor.move":
@@ -105,13 +122,15 @@ class BoardConsumer(AsyncJsonWebsocketConsumer):
         active = bool(content.get("active", False))
         if task_id and not await self._task_belongs_to_board(task_id, self.board_id):
             return
+        user_id = str(self.scope["user"].id)
+        await self._presence_editing(user_id, task_id if active and task_id else None)
         await self.channel_layer.group_send(
             self.group_name,
             {
                 "type": "board.event",
                 "eventType": "editing.changed",
                 "payload": {
-                    "userId": str(self.scope["user"].id),
+                    "userId": user_id,
                     "taskId": task_id or None,
                     "active": active,
                 },
@@ -157,6 +176,24 @@ class BoardConsumer(AsyncJsonWebsocketConsumer):
         return bool(user and boards_for_user(user).filter(pk=board_id).exists())
 
     @database_sync_to_async
+    def _member_payloads(self, user_ids: list[str], board_id: str) -> list[dict[str, Any]]:
+        """Liefert Presence-Daten für alle aktuell bekannten Boardmitglieder."""
+        from apps.workspaces.models import Board, WorkspaceMembership
+        from apps.workspaces.serializers import WorkspaceMemberSerializer
+
+        board = Board.objects.filter(pk=board_id).first()
+        if board is None:
+            return []
+        memberships = WorkspaceMembership.objects.select_related("user").filter(
+            workspace=board.workspace, user_id__in=user_ids, is_active=True
+        )
+        return list(
+            WorkspaceMemberSerializer(
+                memberships, many=True, context={"online_user_ids": set(user_ids)}
+            ).data
+        )
+
+    @database_sync_to_async
     def _member_payload(self, user_id: str, board_id: str) -> dict[str, Any] | None:
         """Liefert kompakte Presence-Daten aus der Workspace-Mitgliedschaft."""
         from apps.workspaces.models import Board, WorkspaceMembership
@@ -170,7 +207,85 @@ class BoardConsumer(AsyncJsonWebsocketConsumer):
             .filter(workspace=board.workspace, user_id=user_id, is_active=True)
             .first()
         )
-        return WorkspaceMemberSerializer(membership).data if membership else None
+        return (
+            WorkspaceMemberSerializer(
+                membership, context={"online_user_ids": {user_id}}
+            ).data
+            if membership
+            else None
+        )
+
+    @database_sync_to_async
+    def _presence_join(
+        self, user_id: str
+    ) -> tuple[bool, list[str], list[dict[str, Any]]]:
+        """Registriert eine Verbindung und liefert Presence samt aktiver Bearbeitungen."""
+        key = f"board-presence:{self.board_id}"
+        now = time.time()
+        presence = cache.get(key) or {}
+        cleaned = {
+            uid: value
+            for uid, value in presence.items()
+            if now - float(value.get("seen", 0)) <= self.PRESENCE_TTL_SECONDS
+        }
+        current = cleaned.get(user_id, {"connections": 0, "seen": now, "taskId": None})
+        first_connection = int(current.get("connections", 0)) <= 0
+        cleaned[user_id] = {
+            "connections": int(current.get("connections", 0)) + 1,
+            "seen": now,
+            "taskId": current.get("taskId"),
+        }
+        cache.set(key, cleaned, timeout=self.PRESENCE_TTL_SECONDS * 2)
+        editing = [
+            {"userId": uid, "taskId": value.get("taskId"), "active": True}
+            for uid, value in cleaned.items()
+            if value.get("taskId")
+        ]
+        return first_connection, list(cleaned), editing
+
+    @database_sync_to_async
+    def _presence_touch(self, user_id: str) -> None:
+        """Aktualisiert den letzten Heartbeat einer aktiven Boardverbindung."""
+        key = f"board-presence:{self.board_id}"
+        presence = cache.get(key) or {}
+        current = presence.get(user_id)
+        if current is None:
+            return
+        current["seen"] = time.time()
+        presence[user_id] = current
+        cache.set(key, presence, timeout=self.PRESENCE_TTL_SECONDS * 2)
+
+    @database_sync_to_async
+    def _presence_editing(self, user_id: str, task_id: str | None) -> None:
+        """Speichert den flüchtigen Bearbeitungszustand für neue Boardverbindungen."""
+        key = f"board-presence:{self.board_id}"
+        presence = cache.get(key) or {}
+        current = presence.get(user_id)
+        if current is None:
+            return
+        current["taskId"] = task_id
+        current["seen"] = time.time()
+        presence[user_id] = current
+        cache.set(key, presence, timeout=self.PRESENCE_TTL_SECONDS * 2)
+
+    @database_sync_to_async
+    def _presence_leave(self, user_id: str) -> bool:
+        """Entfernt eine Verbindung und meldet erst die letzte Sitzung als offline."""
+        key = f"board-presence:{self.board_id}"
+        presence = cache.get(key) or {}
+        current = presence.get(user_id)
+        if current is None:
+            return True
+        connections = max(0, int(current.get("connections", 1)) - 1)
+        if connections == 0:
+            presence.pop(user_id, None)
+            cache.set(key, presence, timeout=self.PRESENCE_TTL_SECONDS * 2)
+            return True
+        current["connections"] = connections
+        current["seen"] = time.time()
+        presence[user_id] = current
+        cache.set(key, presence, timeout=self.PRESENCE_TTL_SECONDS * 2)
+        return False
 
     @database_sync_to_async
     def _task_belongs_to_board(self, task_id: str, board_id: str) -> bool:

@@ -13,7 +13,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts.models import AccountTokenPurpose
+from apps.accounts.models import AccountToken, AccountTokenPurpose
 from apps.accounts.serializers import (
     CurrentUserSerializer,
     EmailOnlySerializer,
@@ -151,6 +151,11 @@ class PasswordChangeView(APIView):
             )
         request.user.set_password(serializer.validated_data["newPassword"])
         request.user.save(update_fields=("password",))
+        AccountToken.objects.filter(
+            user=request.user,
+            purpose=AccountTokenPurpose.RESET_PASSWORD,
+            used_at__isnull=True,
+        ).update(used_at=timezone.now())
         update_session_auth_hash(request, request.user)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -233,4 +238,9 @@ class PasswordResetConfirmView(APIView):
         user.failed_login_count = 0
         user.locked_until = None
         user.save(update_fields=("password", "failed_login_count", "locked_until"))
+        AccountToken.objects.filter(
+            user=user,
+            purpose=AccountTokenPurpose.RESET_PASSWORD,
+            used_at__isnull=True,
+        ).update(used_at=timezone.now())
         return Response(status=status.HTTP_204_NO_CONTENT)

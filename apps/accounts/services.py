@@ -180,7 +180,7 @@ def send_verification_email(*, user: User, request: HttpRequest) -> None:
     issued = issue_account_token(
         user=user, purpose=AccountTokenPurpose.VERIFY_EMAIL, request=request
     )
-    url = f"{settings.FRONTEND_URL}/auth/verify-email?token={issued.raw}"
+    url = f"{settings.FRONTEND_URL}/auth/verify-email#token={issued.raw}"
     send_mail(
         subject="E-Mail-Adresse für Carly Managed bestätigen",
         message=(
@@ -201,7 +201,7 @@ def request_password_reset(*, email: str, request: HttpRequest) -> None:
     issued = issue_account_token(
         user=user, purpose=AccountTokenPurpose.RESET_PASSWORD, request=request
     )
-    url = f"{settings.FRONTEND_URL}/auth/reset-password?token={issued.raw}"
+    url = f"{settings.FRONTEND_URL}/auth/reset-password#token={issued.raw}"
     send_mail(
         subject="Passwort für Carly Managed zurücksetzen",
         message=(

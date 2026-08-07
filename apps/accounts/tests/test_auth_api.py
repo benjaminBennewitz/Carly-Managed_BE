@@ -81,6 +81,8 @@ def test_registration_bootstraps_complete_personal_context() -> None:
         == 1
     )
     assert len(mail.outbox) == 1
+    assert "/auth/verify-email#token=" in mail.outbox[0].body
+    assert "/auth/verify-email?token=" not in mail.outbox[0].body
 
 
 def test_registration_rejects_missing_privacy_acknowledgement() -> None:
@@ -189,6 +191,8 @@ def test_password_reset_is_non_enumerating_and_token_is_single_use() -> None:
     )
     assert unknown.status_code == known.status_code == 200
     assert unknown.data == known.data
+    assert "/auth/reset-password#token=" in mail.outbox[-1].body
+    assert "/auth/reset-password?token=" not in mail.outbox[-1].body
 
     raw_token = re.search(r"token=([^\s]+)", mail.outbox[-1].body).group(1)
     new_password = "Neu!Und-Sicher-2026-Backend"
@@ -252,3 +256,42 @@ def test_forwarded_ip_is_only_trusted_from_configured_proxy(rf) -> None:
         TRUSTED_PROXY_IPS={"203.0.113.10"},
     ):
         assert get_client_ip(request) == "198.51.100.77"
+
+
+def test_password_change_rejects_same_password_and_revokes_open_reset_tokens() -> None:
+    """Verhindert Passwort-Reuse und widerruft offene Wiederherstellungslinks."""
+    user = User.objects.create_user(
+        email="change@example.test",
+        password=STRONG_PASSWORD,
+        display_name="Passwort Test",
+        privacy_acknowledged_at=timezone.now(),
+    )
+    pending = AccountToken.objects.create(
+        user=user,
+        purpose=AccountTokenPurpose.RESET_PASSWORD,
+        token_hash=AccountToken.hash_token("offener-reset-link"),
+        expires_at=timezone.now() + timedelta(hours=1),
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    unchanged = client.post(
+        reverse("password-change"),
+        {"currentPassword": STRONG_PASSWORD, "newPassword": STRONG_PASSWORD},
+        format="json",
+    )
+    assert unchanged.status_code == 400
+    pending.refresh_from_db()
+    assert pending.used_at is None
+
+    new_password = "Ganz!Neu-und-sicher-2026"
+    changed = client.post(
+        reverse("password-change"),
+        {"currentPassword": STRONG_PASSWORD, "newPassword": new_password},
+        format="json",
+    )
+    assert changed.status_code == 204
+    user.refresh_from_db()
+    pending.refresh_from_db()
+    assert user.check_password(new_password)
+    assert pending.used_at is not None

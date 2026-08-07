@@ -119,9 +119,15 @@ class PasswordChangeSerializer(serializers.Serializer[dict[str, Any]]):
     )
 
     def validate_newPassword(self, value: str) -> str:
-        """Prüft das neue Passwort gegen alle konfigurierten Regeln."""
+        """Prüft das neue Passwort gegen aktuelle und konfigurierte Regeln."""
+        user = self.context["request"].user
+        if user.check_password(value):
+            raise serializers.ValidationError(
+                "Das neue Passwort muss sich vom aktuellen Passwort unterscheiden.",
+                code="password_unchanged",
+            )
         try:
-            password_validation.validate_password(value, self.context["request"].user)
+            password_validation.validate_password(value, user)
         except DjangoValidationError as exc:
             raise serializers.ValidationError(list(exc.messages)) from exc
         return value
