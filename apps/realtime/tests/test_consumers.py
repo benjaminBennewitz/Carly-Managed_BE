@@ -57,6 +57,11 @@ async def test_inbox_socket_only_accepts_heartbeat() -> None:
 
     connected, _ = await communicator.connect()
     assert connected is True
+    presence = await communicator.receive_json_from()
+    assert presence == {
+        "type": "presence.workspace.joined",
+        "payload": {"userId": str(user.id)},
+    }
 
     await communicator.send_json_to({"type": "heartbeat"})
     assert await communicator.receive_json_from() == {"type": "heartbeat.ack"}

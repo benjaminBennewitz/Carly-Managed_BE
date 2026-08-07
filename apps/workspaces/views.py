@@ -22,7 +22,7 @@ from apps.common.exceptions import ConflictError
 from apps.common.throttles import SearchRateThrottle, UploadRateThrottle
 from apps.common.validators import validate_upload
 from apps.preferences.rewards import award_carly_reward_safely
-from apps.workspaces.choices import ProjectStatus, WorkspaceRole
+from apps.workspaces.choices import InvitationStatus, ProjectStatus, WorkspaceRole
 from apps.workspaces.models import (
     AutomationRule,
     Board,
@@ -78,6 +78,7 @@ from apps.workspaces.serializers import (
 )
 from apps.workspaces.services import (
     accept_invitation,
+    accept_invitation_by_id,
     archive_task,
     assert_version,
     create_invitation,
@@ -86,6 +87,7 @@ from apps.workspaces.services import (
     create_task,
     increment_version,
     move_task,
+    reject_invitation_by_id,
     save_recurrence_rule,
     set_project_status,
     set_task_completed,
@@ -123,10 +125,17 @@ class WorkspaceViewSet(viewsets.ReadOnlyModelViewSet[Workspace]):
         """Listet Mitglieder oder ändert Rolle und Avatarfarbe eines Mitglieds."""
         workspace = self.get_object()
         if request.method == "GET":
-            memberships = workspace.memberships.filter(is_active=True).select_related("user")
+            from apps.realtime.presence import online_user_ids
+
+            memberships = list(
+                workspace.memberships.filter(is_active=True).select_related("user")
+            )
+            online_ids = online_user_ids(membership.user_id for membership in memberships)
             return Response(
                 WorkspaceMemberSerializer(
-                    memberships, many=True, context=_serializer_context(self)
+                    memberships,
+                    many=True,
+                    context={**_serializer_context(self), "online_user_ids": online_ids},
                 ).data
             )
         require_workspace_manager(user=request.user, workspace=workspace)
@@ -922,15 +931,19 @@ class InvitationViewSet(
     queryset = WorkspaceInvitation.objects.none()
 
     def get_queryset(self):
-        """Liefert Einladungen aus administrierbaren Workspaces."""
+        """Liefert gesendete Verwaltungs- oder persönliche empfangene Einladungen."""
+        base = WorkspaceInvitation.objects.select_related(
+            "workspace", "project", "invited_by", "accepted_by"
+        )
+        if self.request.query_params.get("scope") == "received":
+            return base.filter(email__iexact=self.request.user.email)
+
         managed_workspace_ids = WorkspaceMembership.objects.filter(
             user=self.request.user,
             role__in=[WorkspaceRole.OWNER, WorkspaceRole.MANAGER],
             is_active=True,
         ).values("workspace_id")
-        queryset = WorkspaceInvitation.objects.filter(
-            workspace_id__in=managed_workspace_ids
-        ).select_related("workspace", "project", "invited_by")
+        queryset = base.filter(workspace_id__in=managed_workspace_ids)
         workspace_id = self.request.query_params.get("workspaceId")
         return queryset.filter(workspace_id=workspace_id) if workspace_id else queryset
 
@@ -959,18 +972,32 @@ class InvitationViewSet(
     def destroy(self, request: Any, *args: Any, **kwargs: Any) -> Response:
         """Widerruft eine offene Einladung statt sie spurlos zu löschen."""
         invitation = self.get_object()
-        invitation.status = "revoked"
+        if invitation.status != InvitationStatus.PENDING:
+            raise ConflictError("Nur offene Einladungen können widerrufen werden.")
+        invitation.status = InvitationStatus.REVOKED
         invitation.save(update_fields=("status", "updated_at"))
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated])
     def accept(self, request: Any) -> Response:
-        """Nimmt eine Einladung für die angemeldete E-Mail-Adresse an."""
+        """Nimmt eine Token-Einladung für die angemeldete E-Mail-Adresse an."""
         serializer = InvitationAcceptSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         invitation = accept_invitation(
             raw_token=serializer.validated_data["token"], user=request.user
         )
+        return Response(InvitationSerializer(invitation).data)
+
+    @action(detail=True, methods=["post"], url_path="accept")
+    def accept_received(self, request: Any, pk: str | None = None) -> Response:
+        """Nimmt eine sichtbare In-App-Einladung ohne Mail-Token an."""
+        invitation = accept_invitation_by_id(invitation_id=pk, user=request.user)
+        return Response(InvitationSerializer(invitation).data)
+
+    @action(detail=True, methods=["post"], url_path="reject")
+    def reject_received(self, request: Any, pk: str | None = None) -> Response:
+        """Lehnt eine sichtbare In-App-Einladung nachvollziehbar ab."""
+        invitation = reject_invitation_by_id(invitation_id=pk, user=request.user)
         return Response(InvitationSerializer(invitation).data)
 
 

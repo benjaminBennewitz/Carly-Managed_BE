@@ -54,6 +54,7 @@ class InvitationStatus(models.TextChoices):
 
     PENDING = "pending", "Offen"
     ACCEPTED = "accepted", "Angenommen"
+    REJECTED = "rejected", "Abgelehnt"
     REVOKED = "revoked", "Widerrufen"
     EXPIRED = "expired", "Abgelaufen"
 

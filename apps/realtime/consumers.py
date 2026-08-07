@@ -317,10 +317,10 @@ class BoardConsumer(AsyncJsonWebsocketConsumer):
 
 
 class InboxConsumer(AsyncJsonWebsocketConsumer):
-    """Überträgt persönliche Inbox-Änderungen ohne Client-Schreibzugriff."""
+    """Überträgt persönliche Inbox-Ereignisse und anwendungsweite Presence."""
 
     async def connect(self) -> None:
-        """Akzeptiert ausschließlich authentifizierte Sitzungen."""
+        """Akzeptiert ausschließlich authentifizierte Sitzungen und registriert Presence."""
         user = self.scope["user"]
         if not user.is_authenticated:
             await self.close(code=4401)
@@ -328,17 +328,76 @@ class InboxConsumer(AsyncJsonWebsocketConsumer):
         self.group_name = inbox_group_name(user.id)
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
+        if await self._app_presence_join(str(user.id)):
+            await self._broadcast_workspace_presence("presence.workspace.joined")
 
     async def disconnect(self, close_code: int) -> None:
-        """Entfernt die Verbindung aus der persönlichen Gruppe."""
-        if hasattr(self, "group_name"):
-            await self.channel_layer.group_discard(self.group_name, self.channel_name)
+        """Entfernt die Verbindung und meldet die letzte Sitzung als offline."""
+        if not hasattr(self, "group_name"):
+            return
+        user_id = str(self.scope["user"].id)
+        await self.channel_layer.group_discard(self.group_name, self.channel_name)
+        if await self._app_presence_leave(user_id):
+            await self._broadcast_workspace_presence("presence.workspace.left")
 
     async def receive_json(self, content: Any, **kwargs: Any) -> None:
-        """Erlaubt Clients nur einen Heartbeat."""
+        """Erlaubt Clients nur einen Heartbeat und hält damit Presence aktuell."""
         if isinstance(content, dict) and content.get("type") == "heartbeat":
+            await self._app_presence_touch(str(self.scope["user"].id))
             await self.send_json({"type": "heartbeat.ack"})
 
     async def inbox_event(self, event: dict[str, Any]) -> None:
         """Leitet ein persönliches Inbox-Ereignis weiter."""
         await self.send_json({"type": event["eventType"], "payload": event["payload"]})
+
+    async def _broadcast_workspace_presence(self, event_type: str) -> None:
+        """Verteilt App-Presence an alle Mitglieder gemeinsam genutzter Workspaces."""
+        user_id = str(self.scope["user"].id)
+        recipient_ids = await self._workspace_member_ids(user_id)
+        for recipient_id in recipient_ids:
+            await self.channel_layer.group_send(
+                inbox_group_name(recipient_id),
+                {
+                    "type": "inbox.event",
+                    "eventType": event_type,
+                    "payload": {"userId": user_id},
+                },
+            )
+
+    @database_sync_to_async
+    def _workspace_member_ids(self, user_id: str) -> list[str]:
+        """Liefert Nutzer aus allen Workspaces, die mit dem Konto geteilt werden."""
+        from apps.workspaces.models import WorkspaceMembership
+
+        workspace_ids = WorkspaceMembership.objects.filter(
+            user_id=user_id, is_active=True
+        ).values_list("workspace_id", flat=True)
+        return [
+            str(value)
+            for value in WorkspaceMembership.objects.filter(
+                workspace_id__in=workspace_ids, is_active=True
+            )
+            .values_list("user_id", flat=True)
+            .distinct()
+        ]
+
+    @database_sync_to_async
+    def _app_presence_join(self, user_id: str) -> bool:
+        """Registriert eine Inbox-Verbindung als anwendungsweite Präsenz."""
+        from apps.realtime.presence import join_app_presence
+
+        return join_app_presence(user_id)
+
+    @database_sync_to_async
+    def _app_presence_touch(self, user_id: str) -> None:
+        """Aktualisiert die anwendungsweite Präsenz per Heartbeat."""
+        from apps.realtime.presence import touch_app_presence
+
+        touch_app_presence(user_id)
+
+    @database_sync_to_async
+    def _app_presence_leave(self, user_id: str) -> bool:
+        """Entfernt eine Inbox-Verbindung aus der anwendungsweiten Präsenz."""
+        from apps.realtime.presence import leave_app_presence
+
+        return leave_app_presence(user_id)

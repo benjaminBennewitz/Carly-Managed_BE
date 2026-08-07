@@ -186,8 +186,23 @@ def update_project(
     supplied_version: int | None,
 ) -> Project:
     """Aktualisiert Projektfelder und Rollen unter Versionskontrolle."""
-    locked = Project.objects.select_for_update().select_related("board").get(pk=project.pk)
+    locked = (
+        Project.objects.select_for_update(of=("self",))
+        .select_related("board")
+        .get(pk=project.pk)
+    )
     assert_version(locked, supplied_version)
+    previous_recipient_ids = set(
+        WorkspaceMembership.objects.filter(
+            workspace=locked.workspace,
+            is_active=True,
+            role__in=[WorkspaceRole.OWNER, WorkspaceRole.MANAGER],
+        ).values_list("user_id", flat=True)
+    )
+    previous_recipient_ids.add(locked.owner_id)
+    previous_recipient_ids.update(
+        locked.participants.values_list("user_id", flat=True)
+    )
     manager_users = validated_data.pop("manager_users", None)
     collaborator_users = validated_data.pop("collaborator_users", None)
     is_pinned = validated_data.pop("is_pinned_input", None)
@@ -268,9 +283,35 @@ def update_project(
         ProjectPreference.objects.update_or_create(
             project=locked, user=actor, defaults={"is_pinned": is_pinned}
         )
+    current_recipient_ids = set(
+        WorkspaceMembership.objects.filter(
+            workspace=locked.workspace,
+            is_active=True,
+            role__in=[WorkspaceRole.OWNER, WorkspaceRole.MANAGER],
+        ).values_list("user_id", flat=True)
+    )
+    current_recipient_ids.add(locked.owner_id)
+    current_recipient_ids.update(
+        locked.participants.values_list("user_id", flat=True)
+    )
+    recipient_ids = previous_recipient_ids | current_recipient_ids
     _broadcast_board(
         locked.board.id, "project.updated", {"projectId": str(locked.id), "version": locked.version}
     )
+    if recipient_ids:
+        from apps.realtime.events import broadcast_inbox_event
+
+        transaction.on_commit(
+            lambda: broadcast_inbox_event(
+                recipient_ids,
+                "workspace.project.updated",
+                {
+                    "workspaceId": str(locked.workspace_id),
+                    "projectId": str(locked.id),
+                    "version": locked.version,
+                },
+            )
+        )
     if meaningful_change:
         bucket = int(timezone.now().timestamp() // 300)
         award_carly_reward_safely(
@@ -288,7 +329,11 @@ def set_project_status(
     *, project: Project, actor: User, status_value: str, supplied_version: int
 ) -> Project:
     """Ändert Abschluss oder Archivierung eines Projekts konsistent."""
-    locked = Project.objects.select_for_update().select_related("board").get(pk=project.pk)
+    locked = (
+        Project.objects.select_for_update(of=("self",))
+        .select_related("board")
+        .get(pk=project.pk)
+    )
     assert_version(locked, supplied_version)
     now = timezone.now()
     previous_status = locked.status
@@ -800,10 +845,32 @@ def create_invitation(
     email: str,
     full_name: str,
 ) -> tuple[WorkspaceInvitation, str]:
-    """Erzeugt eine Einmal-Einladung und versendet den Klartext-Link."""
+    """Erzeugt eine Einladung und informiert bestehende Konten zusätzlich in-app."""
     if not workspace.allow_invites:
         raise ConflictError("Einladungen sind für diesen Workspace deaktiviert.")
     normalized_email = email.strip().lower()
+    now = timezone.now()
+    if WorkspaceMembership.objects.filter(
+        workspace=workspace,
+        user__email__iexact=normalized_email,
+        is_active=True,
+    ).exists():
+        raise ConflictError("Diese Person ist bereits Mitglied des Workspaces.")
+
+    WorkspaceInvitation.objects.filter(
+        workspace=workspace,
+        email__iexact=normalized_email,
+        status=InvitationStatus.PENDING,
+        expires_at__lte=now,
+    ).update(status=InvitationStatus.EXPIRED, updated_at=now)
+    if WorkspaceInvitation.objects.filter(
+        workspace=workspace,
+        email__iexact=normalized_email,
+        status=InvitationStatus.PENDING,
+        expires_at__gt=now,
+    ).exists():
+        raise ConflictError("Für diese E-Mail-Adresse besteht bereits eine offene Einladung.")
+
     raw_token = secrets.token_urlsafe(48)
     invitation = WorkspaceInvitation.objects.create(
         workspace=workspace,
@@ -814,29 +881,50 @@ def create_invitation(
         token_hash=WorkspaceInvitation.hash_token(raw_token),
         expires_at=WorkspaceInvitation.default_expiry(),
     )
-    url = f"{settings.FRONTEND_URL}/invite?token={raw_token}"
-    send_mail(
-        subject=f"Einladung zu {workspace.name}",
-        message=(
-            f"Du wurdest zu Carly Managed eingeladen:\n\n{url}\n\nDer Link ist sieben Tage gültig."
-        ),
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[normalized_email],
-        fail_silently=False,
-    )
+    existing_user = User.objects.filter(email__iexact=normalized_email, is_active=True).first()
+    if existing_user:
+        from apps.inbox.services import create_notification
+        from apps.realtime.events import broadcast_inbox_event
+
+        target = f" im Projekt {project.name}" if project else ""
+        create_notification(
+            recipient=existing_user,
+            workspace=workspace,
+            actor=actor,
+            kind="member",
+            title=f"Einladung zu {workspace.name}",
+            body=f"{actor.display_name} hat dich{target} zur Zusammenarbeit eingeladen.",
+            icon="group_add",
+            route="/members",
+        )
+        transaction.on_commit(
+            lambda: broadcast_inbox_event(
+                [existing_user.id],
+                "workspace.invitation.created",
+                {"invitationId": str(invitation.id), "workspaceId": str(workspace.id)},
+            )
+        )
+
+    if existing_user is None:
+        url = f"{settings.FRONTEND_URL}/invite#token={raw_token}"
+        send_mail(
+            subject=f"Einladung zu {workspace.name}",
+            message=(
+                "Du wurdest zu Carly Managed eingeladen. Erstelle ein Konto mit dieser "
+                f"E-Mail-Adresse und öffne anschließend diesen Link:\n\n{url}\n\n"
+                "Der Link ist sieben Tage gültig."
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[normalized_email],
+            fail_silently=False,
+        )
     return invitation, raw_token
 
 
-@transaction.atomic
-def accept_invitation(*, raw_token: str, user: User) -> WorkspaceInvitation:
-    """Verbraucht eine Einladung genau einmal und vergibt minimale Rechte."""
-    token_hash = WorkspaceInvitation.hash_token(raw_token)
-    invitation = (
-        WorkspaceInvitation.objects.select_for_update()
-        .select_related("workspace", "project")
-        .filter(token_hash=token_hash)
-        .first()
-    )
+def _validate_invitation_for_user(
+    invitation: WorkspaceInvitation | None, user: User
+) -> WorkspaceInvitation:
+    """Prüft Status, Ablauf und E-Mail-Zuordnung einer Einladung."""
     if (
         invitation is None
         or invitation.status != InvitationStatus.PENDING
@@ -850,6 +938,13 @@ def accept_invitation(*, raw_token: str, user: User) -> WorkspaceInvitation:
             "Die Einladung gehört zu einer anderen E-Mail-Adresse.",
             code="invitation_email_mismatch",
         )
+    return invitation
+
+
+def _complete_invitation_acceptance(
+    *, invitation: WorkspaceInvitation, user: User
+) -> WorkspaceInvitation:
+    """Vergibt Workspace-/Projektzugriff und markiert die Einladung als angenommen."""
     WorkspaceMembership.objects.update_or_create(
         workspace=invitation.workspace,
         user=user,
@@ -865,4 +960,115 @@ def accept_invitation(*, raw_token: str, user: User) -> WorkspaceInvitation:
     invitation.accepted_by = user
     invitation.accepted_at = timezone.now()
     invitation.save(update_fields=("status", "accepted_by", "accepted_at", "updated_at"))
+
+    from apps.inbox.services import create_notification
+    from apps.realtime.events import broadcast_inbox_event
+
+    create_notification(
+        recipient=invitation.invited_by,
+        workspace=invitation.workspace,
+        actor=user,
+        kind="member",
+        title="Einladung angenommen",
+        body=f"{user.display_name} ist {invitation.workspace.name} beigetreten.",
+        icon="how_to_reg",
+        route="/members",
+    )
+    workspace_member_ids = list(
+        WorkspaceMembership.objects.filter(
+            workspace=invitation.workspace, is_active=True
+        ).values_list("user_id", flat=True)
+    )
+    transaction.on_commit(
+        lambda: broadcast_inbox_event(
+            [invitation.invited_by_id, user.id],
+            "workspace.invitation.updated",
+            {
+                "invitationId": str(invitation.id),
+                "workspaceId": str(invitation.workspace_id),
+                "status": InvitationStatus.ACCEPTED,
+            },
+        )
+    )
+    transaction.on_commit(
+        lambda: broadcast_inbox_event(
+            workspace_member_ids,
+            "workspace.membership.updated",
+            {
+                "workspaceId": str(invitation.workspace_id),
+                "userId": str(user.id),
+            },
+        )
+    )
+    return invitation
+
+
+@transaction.atomic
+def accept_invitation(*, raw_token: str, user: User) -> WorkspaceInvitation:
+    """Verbraucht eine Token-Einladung genau einmal und vergibt minimale Rechte."""
+    token_hash = WorkspaceInvitation.hash_token(raw_token)
+    invitation = (
+        WorkspaceInvitation.objects.select_for_update(of=("self",))
+        .select_related("workspace", "project", "invited_by")
+        .filter(token_hash=token_hash)
+        .first()
+    )
+    return _complete_invitation_acceptance(
+        invitation=_validate_invitation_for_user(invitation, user),
+        user=user,
+    )
+
+
+@transaction.atomic
+def accept_invitation_by_id(*, invitation_id: Any, user: User) -> WorkspaceInvitation:
+    """Nimmt eine dem angemeldeten Konto zugeordnete In-App-Einladung an."""
+    invitation = (
+        WorkspaceInvitation.objects.select_for_update(of=("self",))
+        .select_related("workspace", "project", "invited_by")
+        .filter(pk=invitation_id)
+        .first()
+    )
+    return _complete_invitation_acceptance(
+        invitation=_validate_invitation_for_user(invitation, user),
+        user=user,
+    )
+
+
+@transaction.atomic
+def reject_invitation_by_id(*, invitation_id: Any, user: User) -> WorkspaceInvitation:
+    """Lehnt eine offene In-App-Einladung ab, ohne den Eintrag zu löschen."""
+    invitation = (
+        WorkspaceInvitation.objects.select_for_update(of=("self",))
+        .select_related("workspace", "project", "invited_by")
+        .filter(pk=invitation_id)
+        .first()
+    )
+    invitation = _validate_invitation_for_user(invitation, user)
+    invitation.status = InvitationStatus.REJECTED
+    invitation.save(update_fields=("status", "updated_at"))
+
+    from apps.inbox.services import create_notification
+    from apps.realtime.events import broadcast_inbox_event
+
+    create_notification(
+        recipient=invitation.invited_by,
+        workspace=invitation.workspace,
+        actor=user,
+        kind="member",
+        title="Einladung abgelehnt",
+        body=f"{user.display_name} hat die Einladung zu {invitation.workspace.name} abgelehnt.",
+        icon="person_cancel",
+        route="/members",
+    )
+    transaction.on_commit(
+        lambda: broadcast_inbox_event(
+            [invitation.invited_by_id, user.id],
+            "workspace.invitation.updated",
+            {
+                "invitationId": str(invitation.id),
+                "workspaceId": str(invitation.workspace_id),
+                "status": InvitationStatus.REJECTED,
+            },
+        )
+    )
     return invitation

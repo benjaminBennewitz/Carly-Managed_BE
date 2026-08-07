@@ -93,7 +93,7 @@ class WorkspaceMemberSerializer(serializers.ModelSerializer[WorkspaceMembership]
         return _contrast_text(obj.avatar_color)
 
     def get_isOnline(self, obj: WorkspaceMembership) -> bool:
-        """Überlässt den echten Online-Status bewusst dem WebSocket-Kanal."""
+        """Liest den serverseitig ermittelten App-Presence-Status aus dem Kontext."""
         online_ids = self.context.get("online_user_ids", set())
         return str(obj.user_id) in online_ids
 
@@ -822,12 +822,17 @@ class AutomationRuleSerializer(serializers.ModelSerializer[AutomationRule]):
 
 
 class InvitationSerializer(serializers.ModelSerializer[WorkspaceInvitation]):
-    """Gibt Einladungsmetadaten ohne Token-Hash aus."""
+    """Gibt Einladungsmetadaten ohne Token-Hash für Sender und Empfänger aus."""
 
     fullName = serializers.CharField(source="full_name")
+    workspaceId = serializers.UUIDField(source="workspace_id", read_only=True)
+    workspaceName = serializers.CharField(source="workspace.name", read_only=True)
     projectId = serializers.UUIDField(source="project_id", allow_null=True, read_only=True)
+    projectName = serializers.CharField(source="project.name", allow_null=True, read_only=True)
     invitedById = serializers.UUIDField(source="invited_by_id", read_only=True)
+    invitedByName = serializers.CharField(source="invited_by.display_name", read_only=True)
     expiresAt = serializers.DateTimeField(source="expires_at", read_only=True)
+    acceptedAt = serializers.DateTimeField(source="accepted_at", allow_null=True, read_only=True)
     createdAt = serializers.DateTimeField(source="created_at", read_only=True)
 
     class Meta:
@@ -836,10 +841,15 @@ class InvitationSerializer(serializers.ModelSerializer[WorkspaceInvitation]):
             "id",
             "fullName",
             "email",
+            "workspaceId",
+            "workspaceName",
             "projectId",
+            "projectName",
             "invitedById",
+            "invitedByName",
             "status",
             "expiresAt",
+            "acceptedAt",
             "createdAt",
         )
 
@@ -904,7 +914,7 @@ class MoveTaskSerializer(serializers.Serializer[dict[str, Any]]):
     targetColumnId = serializers.PrimaryKeyRelatedField(
         source="target_column", queryset=BoardColumn.objects.all()
     )
-    targetPosition = serializers.IntegerField(min_value=0)
+    targetPosition = serializers.IntegerField(source="target_position", min_value=0)
     version = serializers.IntegerField(min_value=1)
 
 
