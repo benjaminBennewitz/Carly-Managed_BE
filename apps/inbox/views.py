@@ -18,9 +18,8 @@ from apps.inbox.serializers import (
     ParticipantsSerializer,
     SystemNotificationSerializer,
 )
-from apps.inbox.services import create_conversation, send_message
+from apps.inbox.services import create_conversation, send_message, users_share_project_context
 from apps.workspaces.models import WorkspaceMembership
-from apps.workspaces.selectors import workspaces_for_user
 from apps.workspaces.services import assert_version, increment_version
 
 
@@ -101,13 +100,18 @@ class ConversationViewSet(viewsets.ModelViewSet[Conversation]):
         """Erstellt ein Gespräch in einem zugänglichen Workspace."""
         serializer = ConversationCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        workspace = (
-            workspaces_for_user(request.user)
-            .filter(pk=serializer.validated_data["workspaceId"])
+        membership = (
+            WorkspaceMembership.objects.select_related("workspace")
+            .filter(
+                workspace_id=serializer.validated_data["workspaceId"],
+                user=request.user,
+                is_active=True,
+            )
             .first()
         )
-        if workspace is None:
-            raise NotFound("Workspace nicht gefunden.")
+        if membership is None:
+            raise NotFound("Team-Kontext nicht gefunden.")
+        workspace = membership.workspace
         conversation = create_conversation(
             workspace=workspace,
             creator=request.user,
@@ -159,14 +163,35 @@ class ConversationViewSet(viewsets.ModelViewSet[Conversation]):
             locked = Conversation.objects.select_for_update().get(pk=conversation.pk)
             assert_version(locked, serializer.validated_data["version"])
             users = serializer.validated_data["participants"]
-            active_ids = set(
+            memberships = list(
                 WorkspaceMembership.objects.filter(
                     workspace=locked.workspace, user__in=users, is_active=True
-                ).values_list("user_id", flat=True)
+                )
             )
+            active_ids = {membership.user_id for membership in memberships}
             if any(user.id not in active_ids for user in users):
-                raise ValidationError("Teilnehmende müssen aktive Workspace-Mitglieder sein.")
+                raise ValidationError("Teilnehmende benötigen einen gültigen Team-Kontext.")
             if request.method == "POST":
+                active_links = locked.participant_links.filter(
+                    left_at__isnull=True
+                ).select_related("user")
+                current_users = [link.user for link in active_links]
+                combined_users = {user.id: user for user in [*current_users, *users]}
+                combined_memberships = list(
+                    WorkspaceMembership.objects.filter(
+                        workspace=locked.workspace,
+                        user_id__in=combined_users,
+                        is_active=True,
+                    )
+                )
+                if any(
+                    membership.is_project_guest for membership in combined_memberships
+                ) and not users_share_project_context(
+                    workspace=locked.workspace, users=combined_users.values()
+                ):
+                    raise ValidationError(
+                        "Projektgäste können nur innerhalb eines gemeinsamen Projekts schreiben."
+                    )
                 for user in users:
                     ConversationParticipant.objects.update_or_create(
                         conversation=locked, user=user, defaults={"left_at": None}

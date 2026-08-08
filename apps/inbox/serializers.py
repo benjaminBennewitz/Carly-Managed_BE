@@ -94,6 +94,7 @@ class ConversationSerializer(InboxMemberMixin, serializers.ModelSerializer[Conve
 
     participants = serializers.SerializerMethodField()
     messages = serializers.SerializerMethodField()
+    workspaceId = serializers.UUIDField(source="workspace_id", read_only=True)
     createdAt = serializers.DateTimeField(source="created_at", read_only=True)
     updatedAt = serializers.DateTimeField(source="updated_at", read_only=True)
     unreadCount = serializers.SerializerMethodField()
@@ -102,6 +103,7 @@ class ConversationSerializer(InboxMemberMixin, serializers.ModelSerializer[Conve
         model = Conversation
         fields = (
             "id",
+            "workspaceId",
             "participants",
             "messages",
             "createdAt",

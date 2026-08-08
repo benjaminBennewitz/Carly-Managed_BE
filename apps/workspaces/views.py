@@ -22,7 +22,11 @@ from apps.common.exceptions import ConflictError
 from apps.common.throttles import SearchRateThrottle, UploadRateThrottle
 from apps.common.validators import validate_upload
 from apps.preferences.rewards import award_carly_reward_safely
-from apps.workspaces.choices import BoardKind, InvitationStatus, ProjectStatus, WorkspaceRole
+from apps.workspaces.choices import BoardKind
+from apps.workspaces.choices import InvitationStatus
+from apps.workspaces.choices import ProjectRole
+from apps.workspaces.choices import ProjectStatus
+from apps.workspaces.choices import WorkspaceRole
 from apps.workspaces.models import (
     AutomationRule,
     Board,
@@ -82,8 +86,9 @@ from apps.workspaces.services import (
     archive_task,
     assert_version,
     create_invitation,
+    cleanup_unused_project_guests,
     create_project,
-    ensure_personal_board_for_workspace,
+    ensure_personal_board,
     create_subtask,
     create_task,
     increment_version,
@@ -129,7 +134,9 @@ class WorkspaceViewSet(viewsets.ReadOnlyModelViewSet[Workspace]):
             from apps.realtime.presence import online_user_ids
 
             memberships = list(
-                workspace.memberships.filter(is_active=True).select_related("user")
+                workspace.memberships.filter(
+                    is_active=True, is_project_guest=False
+                ).select_related("user")
             )
             online_ids = online_user_ids(membership.user_id for membership in memberships)
             return Response(
@@ -142,7 +149,11 @@ class WorkspaceViewSet(viewsets.ReadOnlyModelViewSet[Workspace]):
         require_workspace_manager(user=request.user, workspace=workspace)
         member_id = request.data.get("memberId")
         membership = (
-            workspace.memberships.filter(user_id=member_id, is_active=True)
+            workspace.memberships.filter(
+                user_id=member_id,
+                is_active=True,
+                is_project_guest=False,
+            )
             .select_related("user")
             .first()
         )
@@ -255,7 +266,14 @@ class ProjectViewSet(viewsets.ModelViewSet[Project]):
         with transaction.atomic():
             locked = Project.objects.select_for_update().get(pk=project.pk)
             assert_version(locked, serializer.validated_data["version"])
+            workspace = locked.workspace
+            participant_ids = set(
+                locked.participants.values_list("user_id", flat=True)
+            )
             locked.delete()
+            cleanup_unused_project_guests(
+                workspace=workspace, user_ids=participant_ids
+            )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     def _status_action(self, request: Any, value: str) -> Response:
@@ -568,6 +586,15 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
     def _completion_action(self, request: Any, completed: bool) -> Response:
         task = self.get_object()
         require_board_editor(user=request.user, board=task.board)
+        if task.source_task_id and task.source_subtask_id is None:
+            source_task = (
+                Task.objects.filter(pk=task.source_task_id)
+                .select_related("board", "board__project")
+                .first()
+            )
+            if source_task is None:
+                raise NotFound("Die ursprüngliche Projektaufgabe wurde nicht gefunden.")
+            require_board_editor(user=request.user, board=source_task.board)
         serializer = VersionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         updated = set_task_completed(
@@ -985,8 +1012,17 @@ class InvitationViewSet(
             user=self.request.user,
             role__in=[WorkspaceRole.OWNER, WorkspaceRole.MANAGER],
             is_active=True,
-        ).values("workspace_id")
-        queryset = base.filter(workspace_id__in=managed_workspace_ids)
+        ).values_list("workspace_id", flat=True)
+        managed_project_ids = Project.objects.filter(
+            Q(owner=self.request.user)
+            | Q(
+                participants__user=self.request.user,
+                participants__role=ProjectRole.MANAGER,
+            )
+        ).values_list("id", flat=True)
+        queryset = base.filter(
+            Q(workspace_id__in=managed_workspace_ids) | Q(project_id__in=managed_project_ids)
+        ).distinct()
         workspace_id = self.request.query_params.get("workspaceId")
         return queryset.filter(workspace_id=workspace_id) if workspace_id else queryset
 
@@ -995,18 +1031,26 @@ class InvitationViewSet(
         return InvitationCreateSerializer if self.action == "create" else InvitationSerializer
 
     def create(self, request: Any, *args: Any, **kwargs: Any) -> Response:
-        """Erstellt und versendet eine Einladung."""
-        workspace = (
-            workspaces_for_user(request.user).filter(pk=request.data.get("workspaceId")).first()
-        )
-        if workspace is None:
-            raise NotFound("Workspace nicht gefunden.")
-        require_workspace_manager(user=request.user, workspace=workspace)
+        """Erstellt eine Team- oder rein projektbezogene Einladung."""
         serializer = InvitationCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         project = serializer.validated_data.get("project")
-        if project and project.workspace_id != workspace.id:
-            raise ValidationError({"projectId": "Das Projekt gehört nicht zu diesem Workspace."})
+        if project:
+            workspace = project.workspace
+            if str(project.workspace_id) != str(request.data.get("workspaceId")):
+                raise ValidationError(
+                    {"projectId": "Das Projekt gehört nicht zu diesem Workspace."}
+                )
+            require_project_manager(user=request.user, project=project)
+        else:
+            workspace = (
+                workspaces_for_user(request.user)
+                .filter(pk=request.data.get("workspaceId"))
+                .first()
+            )
+            if workspace is None:
+                raise NotFound("Workspace nicht gefunden.")
+            require_workspace_manager(user=request.user, workspace=workspace)
         invitation, _ = create_invitation(
             workspace=workspace, actor=request.user, **serializer.validated_data
         )
@@ -1077,12 +1121,11 @@ class JoinRequestViewSet(viewsets.ReadOnlyModelViewSet[WorkspaceJoinRequest]):
                 defaults={
                     "role": WorkspaceRole.MEMBER,
                     "is_active": True,
+                    "is_project_guest": False,
                     "avatar_color": join_request.avatar_color,
                 },
             )
-            ensure_personal_board_for_workspace(
-                user=join_request.user, workspace=join_request.workspace
-            )
+            ensure_personal_board(user=join_request.user)
         return Response(JoinRequestSerializer(join_request, context=_serializer_context(self)).data)
 
     @action(detail=True, methods=["post"])

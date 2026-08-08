@@ -24,6 +24,7 @@ from apps.workspaces.choices import (
     InvitationStatus,
     ProjectRole,
     ProjectStatus,
+    ProjectVisibility,
     RecurrenceScheduleType,
     WorkspaceRole,
 )
@@ -61,6 +62,102 @@ def _next_position(model: type, **filters: Any) -> int:
     """Ermittelt atomar die nächste freie ganzzahlige Position."""
     maximum = model.objects.filter(**filters).aggregate(value=Max("position"))["value"]
     return 0 if maximum is None else maximum + 1
+
+
+def _ensure_project_access_for_users(
+    *, project: Project | None, users: list[User | None]
+) -> None:
+    """Macht echte Zuweisungen zu einer dauerhaften Projektfreigabe."""
+    if project is None:
+        return
+
+    user_ids = {user.id for user in users if user is not None and user.id != project.owner_id}
+    if not user_ids:
+        return
+
+    active_ids = set(
+        WorkspaceMembership.objects.filter(
+            workspace=project.workspace,
+            user_id__in=user_ids,
+            is_active=True,
+        ).values_list("user_id", flat=True)
+    )
+    existing_ids = set(
+        ProjectParticipant.objects.filter(
+            project=project,
+            user_id__in=active_ids,
+        ).values_list("user_id", flat=True)
+    )
+    new_ids = active_ids - existing_ids
+    if not new_ids:
+        return
+
+    ProjectParticipant.objects.bulk_create(
+        [
+            ProjectParticipant(
+                project=project,
+                user_id=user_id,
+                role=ProjectRole.COLLABORATOR,
+            )
+            for user_id in new_ids
+        ],
+        ignore_conflicts=True,
+    )
+
+    recipient_ids = set(
+        ProjectParticipant.objects.filter(project=project).values_list("user_id", flat=True)
+    )
+    recipient_ids.add(project.owner_id)
+    recipient_ids.update(
+        WorkspaceMembership.objects.filter(
+            workspace=project.workspace,
+            is_active=True,
+            role__in=[WorkspaceRole.OWNER, WorkspaceRole.MANAGER],
+        ).values_list("user_id", flat=True)
+    )
+    if project.visibility == ProjectVisibility.WORKSPACE:
+        recipient_ids.update(
+            WorkspaceMembership.objects.filter(
+                workspace=project.workspace,
+                is_active=True,
+                is_project_guest=False,
+            ).values_list("user_id", flat=True)
+        )
+
+    from apps.realtime.events import broadcast_inbox_event
+
+    transaction.on_commit(
+        lambda: broadcast_inbox_event(
+            recipient_ids,
+            "workspace.project.updated",
+            {
+                "workspaceId": str(project.workspace_id),
+                "projectId": str(project.id),
+                "version": project.version,
+            },
+        )
+    )
+
+
+def cleanup_unused_project_guests(*, workspace: Workspace, user_ids: set[Any]) -> None:
+    """Deaktiviert Projektgäste, sobald kein Projektzugriff im Team mehr besteht."""
+    if not user_ids:
+        return
+    memberships = WorkspaceMembership.objects.filter(
+        workspace=workspace,
+        user_id__in=user_ids,
+        is_active=True,
+        is_project_guest=True,
+    )
+    for membership in memberships:
+        still_participates = ProjectParticipant.objects.filter(
+            project__workspace=workspace,
+            user_id=membership.user_id,
+        ).exists()
+        if still_participates:
+            continue
+        membership.is_active = False
+        membership.save(update_fields=("is_active", "updated_at"))
 
 
 def assert_version(instance: Any, supplied_version: int | None) -> None:
@@ -130,24 +227,48 @@ def _ensure_personal_intake_column(*, board: Board, user: User) -> BoardColumn:
     return fallback
 
 
-def ensure_personal_board_for_workspace(*, user: User, workspace: Workspace) -> Board:
-    """Stellt pro Nutzer und Workspace genau ein persönliches Board bereit."""
-    board, created = Board.objects.get_or_create(
+def ensure_personal_board(*, user: User) -> Board:
+    """Stellt genau ein globales, niemals geteiltes persönliches Board bereit."""
+    board = (
+        Board.objects.filter(owner=user, kind=BoardKind.PERSONAL)
+        .select_related("workspace")
+        .order_by("created_at")
+        .first()
+    )
+    if board is not None:
+        _ensure_personal_intake_column(board=board, user=user)
+        return board
+
+    workspace = Workspace.objects.filter(owner=user).order_by("created_at").first()
+    if workspace is None:
+        workspace = Workspace.objects.create(name=f"{user.display_name}s Workspace", owner=user)
+        WorkspaceMembership.objects.create(
+            workspace=workspace,
+            user=user,
+            role=WorkspaceRole.OWNER,
+            avatar_color="#6558d3",
+        )
+    board = Board.objects.create(
         workspace=workspace,
         owner=user,
         kind=BoardKind.PERSONAL,
-        defaults={"title": "Mein Board"},
+        title="Mein Board",
     )
-    if created:
-        offset = 1 if _dynamic_new_columns_enabled(user) else 0
-        BoardColumn.objects.bulk_create(
-            [
-                BoardColumn(board=board, title=title, color=color, position=position + offset)
-                for position, (title, color) in enumerate(DEFAULT_COLUMNS)
-            ]
-        )
+    offset = 1 if _dynamic_new_columns_enabled(user) else 0
+    BoardColumn.objects.bulk_create(
+        [
+            BoardColumn(board=board, title=title, color=color, position=position + offset)
+            for position, (title, color) in enumerate(DEFAULT_COLUMNS)
+        ]
+    )
     _ensure_personal_intake_column(board=board, user=user)
     return board
+
+
+def ensure_personal_board_for_workspace(*, user: User, workspace: Workspace) -> Board:
+    """Erhält ältere Aufrufer kompatibel, ohne ein Team-Board zu erzeugen."""
+    del workspace
+    return ensure_personal_board(user=user)
 
 
 @transaction.atomic
@@ -155,7 +276,7 @@ def bootstrap_personal_workspace(user: User) -> Workspace:
     """Erstellt genau einen persönlichen Start-Workspace samt Board."""
     existing = Workspace.objects.filter(owner=user).first()
     if existing:
-        ensure_personal_board_for_workspace(user=user, workspace=existing)
+        ensure_personal_board(user=user)
         return existing
     workspace = Workspace.objects.create(name=f"{user.display_name}s Workspace", owner=user)
     WorkspaceMembership.objects.create(
@@ -164,7 +285,7 @@ def bootstrap_personal_workspace(user: User) -> Workspace:
         role=WorkspaceRole.OWNER,
         avatar_color="#6558d3",
     )
-    ensure_personal_board_for_workspace(user=user, workspace=workspace)
+    ensure_personal_board(user=user)
     from apps.preferences.services import bootstrap_preferences
 
     bootstrap_preferences(user=user, workspace=workspace)
@@ -252,6 +373,7 @@ def update_project(
         .get(pk=project.pk)
     )
     assert_version(locked, supplied_version)
+    previous_visibility = locked.visibility
     previous_recipient_ids = set(
         WorkspaceMembership.objects.filter(
             workspace=locked.workspace,
@@ -263,6 +385,14 @@ def update_project(
     previous_recipient_ids.update(
         locked.participants.values_list("user_id", flat=True)
     )
+    if previous_visibility == ProjectVisibility.WORKSPACE:
+        previous_recipient_ids.update(
+            WorkspaceMembership.objects.filter(
+                workspace=locked.workspace,
+                is_active=True,
+                is_project_guest=False,
+            ).values_list("user_id", flat=True)
+        )
     manager_users = validated_data.pop("manager_users", None)
     collaborator_users = validated_data.pop("collaborator_users", None)
     is_pinned = validated_data.pop("is_pinned_input", None)
@@ -334,11 +464,51 @@ def update_project(
                     if participant.role == ProjectRole.COLLABORATOR and user_id not in desired
                 }
             )
+        if locked.visibility == ProjectVisibility.RESTRICTED:
+            assigned_user_ids = set(
+                Task.objects.filter(
+                    project=locked,
+                    board=locked.board,
+                    archived_at__isnull=True,
+                    assignee_id__isnull=False,
+                ).values_list("assignee_id", flat=True)
+            )
+            assigned_user_ids.update(
+                Task.objects.filter(
+                    project=locked,
+                    board=locked.board,
+                    archived_at__isnull=True,
+                ).values_list("collaborators__id", flat=True)
+            )
+            assigned_user_ids.update(
+                Subtask.objects.filter(
+                    task__project=locked,
+                    task__board=locked.board,
+                    task__archived_at__isnull=True,
+                    assignee_id__isnull=False,
+                ).values_list("assignee_id", flat=True)
+            )
+            assigned_user_ids.discard(None)
+            assigned_user_ids.discard(locked.owner_id)
+            missing_assigned_ids = assigned_user_ids - set(desired)
+            if missing_assigned_ids:
+                raise ValidationError(
+                    {
+                        "collaboratorIds": (
+                            "Zugewiesene Personen können erst entfernt werden, wenn ihre "
+                            "offenen Projektaufgaben und Unteraufgaben neu zugewiesen wurden."
+                        )
+                    }
+                )
+        removed_participant_ids = set(existing) - set(desired)
         locked.participants.exclude(user_id__in=desired).delete()
         for user_id, role in desired.items():
             ProjectParticipant.objects.update_or_create(
                 project=locked, user_id=user_id, defaults={"role": role}
             )
+        cleanup_unused_project_guests(
+            workspace=locked.workspace, user_ids=removed_participant_ids
+        )
     if is_pinned is not None:
         ProjectPreference.objects.update_or_create(
             project=locked, user=actor, defaults={"is_pinned": is_pinned}
@@ -354,6 +524,14 @@ def update_project(
     current_recipient_ids.update(
         locked.participants.values_list("user_id", flat=True)
     )
+    if locked.visibility == ProjectVisibility.WORKSPACE:
+        current_recipient_ids.update(
+            WorkspaceMembership.objects.filter(
+                workspace=locked.workspace,
+                is_active=True,
+                is_project_guest=False,
+            ).values_list("user_id", flat=True)
+        )
     recipient_ids = previous_recipient_ids | current_recipient_ids
     _broadcast_board(
         locked.board.id, "project.updated", {"projectId": str(locked.id), "version": locked.version}
@@ -450,7 +628,7 @@ def _sync_assignment_mirror(task: Task) -> None:
             _broadcast_board(board_id, "task.deleted", {"taskId": mirror_id})
         return
 
-    personal_board = ensure_personal_board_for_workspace(user=assignee, workspace=task.workspace)
+    personal_board = ensure_personal_board(user=assignee)
     intake_column = _ensure_personal_intake_column(board=personal_board, user=assignee)
     mirror = mirrors.filter(board=personal_board).first()
 
@@ -462,7 +640,7 @@ def _sync_assignment_mirror(task: Task) -> None:
 
     if mirror is None:
         mirror = Task.objects.create(
-            workspace=task.workspace,
+            workspace=personal_board.workspace,
             board=personal_board,
             column=intake_column,
             project=task.project,
@@ -493,6 +671,7 @@ def _sync_assignment_mirror(task: Task) -> None:
         )
         return
 
+    mirror.workspace = personal_board.workspace
     mirror.project = task.project
     mirror.owner = task.owner
     mirror.assignee = assignee
@@ -509,6 +688,7 @@ def _sync_assignment_mirror(task: Task) -> None:
     increment_version(mirror)
     mirror.save(
         update_fields=(
+            "workspace",
             "project",
             "owner",
             "assignee",
@@ -540,6 +720,10 @@ def create_task(
 ) -> Task:
     """Erstellt einen Task, ordnet ihn ein und führt passende Regeln aus."""
     collaborators = validated_data.pop("collaborators", [])
+    _ensure_project_access_for_users(
+        project=board.project,
+        users=[validated_data.get("assignee"), *collaborators],
+    )
     if board.kind == BoardKind.PERSONAL:
         validated_data["assignee"] = board.owner
         validated_data["column"] = _ensure_personal_intake_column(
@@ -609,6 +793,10 @@ def update_task(
     locked.save()
     if collaborators is not None:
         locked.collaborators.set(collaborators)
+    _ensure_project_access_for_users(
+        project=locked.project,
+        users=[locked.assignee, *(collaborators or list(locked.collaborators.all()))],
+    )
     _sync_assignment_mirror(locked)
     add_history(task=locked, actor=actor, action="Task aktualisiert", icon="edit_note")
     if old_assignee_id != locked.assignee_id:
@@ -800,12 +988,12 @@ def _sync_subtask_mirror(subtask: Subtask) -> None:
             _broadcast_board(board_id, "task.deleted", {"taskId": mirror_id})
         return
 
-    personal_board = ensure_personal_board_for_workspace(user=assignee, workspace=task.workspace)
+    personal_board = ensure_personal_board(user=assignee)
     intake_column = _ensure_personal_intake_column(board=personal_board, user=assignee)
 
     if mirror is None:
         mirror = Task.objects.create(
-            workspace=task.workspace,
+            workspace=personal_board.workspace,
             board=personal_board,
             column=intake_column,
             project=task.project,
@@ -835,7 +1023,7 @@ def _sync_subtask_mirror(subtask: Subtask) -> None:
 
     old_board_id = mirror.board_id
     board_changed = mirror.board_id != personal_board.id
-    mirror.workspace = task.workspace
+    mirror.workspace = personal_board.workspace
     mirror.board = personal_board
     if board_changed:
         mirror.column = intake_column
@@ -892,6 +1080,7 @@ def create_subtask(
     if subtask_id is not None:
         create_kwargs["id"] = subtask_id
     subtask = Subtask.objects.create(**create_kwargs)
+    _ensure_project_access_for_users(project=task.project, users=[assignee])
     add_history(
         task=task, actor=actor, action=f"Unteraufgabe „{title}“ erstellt", icon="playlist_add"
     )
@@ -925,6 +1114,7 @@ def update_subtask(
     increment_version(locked)
     locked.full_clean()
     locked.save()
+    _ensure_project_access_for_users(project=locked.task.project, users=[locked.assignee])
     _sync_subtask_mirror(locked)
     add_history(
         task=locked.task,
@@ -1080,28 +1270,38 @@ def create_invitation(
         raise ConflictError("Einladungen sind für diesen Workspace deaktiviert.")
     normalized_email = email.strip().lower()
     now = timezone.now()
-    if WorkspaceMembership.objects.filter(
-        workspace=workspace,
-        user__email__iexact=normalized_email,
-        is_active=True,
-    ).exists():
-        raise ConflictError("Diese Person ist bereits Mitglied des Workspaces.")
-
-    WorkspaceInvitation.objects.filter(
-        workspace=workspace,
-        email__iexact=normalized_email,
-        status=InvitationStatus.PENDING,
-        expires_at__lte=now,
-    ).update(status=InvitationStatus.EXPIRED, updated_at=now)
-    if WorkspaceInvitation.objects.filter(
-        workspace=workspace,
-        email__iexact=normalized_email,
-        status=InvitationStatus.PENDING,
-        expires_at__gt=now,
-    ).exists():
-        raise ConflictError("Für diese E-Mail-Adresse besteht bereits eine offene Einladung.")
-
     existing_user = User.objects.filter(email__iexact=normalized_email, is_active=True).first()
+    existing_membership = (
+        WorkspaceMembership.objects.filter(
+            workspace=workspace,
+            user=existing_user,
+            is_active=True,
+        ).first()
+        if existing_user
+        else None
+    )
+    if (
+        project is None
+        and existing_membership is not None
+        and not existing_membership.is_project_guest
+    ):
+        raise ConflictError("Diese Person ist bereits Mitglied des Workspaces.")
+    if project is not None and existing_user is not None:
+        already_participant = project.participants.filter(user=existing_user).exists()
+        if project.owner_id == existing_user.id or already_participant:
+            raise ConflictError("Diese Person hat bereits Zugriff auf das Projekt.")
+
+    pending = WorkspaceInvitation.objects.filter(
+        workspace=workspace,
+        project=project,
+        email__iexact=normalized_email,
+        status=InvitationStatus.PENDING,
+    )
+    pending.filter(expires_at__lte=now).update(
+        status=InvitationStatus.EXPIRED, updated_at=now
+    )
+    if pending.filter(expires_at__gt=now).exists():
+        raise ConflictError("Für diese E-Mail-Adresse besteht bereits eine offene Einladung.")
     raw_token = secrets.token_urlsafe(48)
     invitation = WorkspaceInvitation.objects.create(
         workspace=workspace,
@@ -1122,7 +1322,7 @@ def create_invitation(
             workspace=workspace,
             actor=actor,
             kind="member",
-            title=f"Einladung zu {workspace.name}",
+            title=f"Einladung zu {project.name if project else workspace.name}",
             body=f"{actor.display_name} hat dich{target} zur Zusammenarbeit eingeladen.",
             icon="group_add",
             route="/members",
@@ -1138,7 +1338,7 @@ def create_invitation(
     if existing_user is None:
         url = f"{settings.FRONTEND_URL}/invite#token={raw_token}"
         send_mail(
-            subject=f"Einladung zu {workspace.name}",
+            subject=f"Einladung zu {project.name if project else workspace.name}",
             message=(
                 "Du wurdest zu Carly Managed eingeladen. Erstelle ein Konto mit dieser "
                 f"E-Mail-Adresse und öffne anschließend diesen Link:\n\n{url}\n\n"
@@ -1175,12 +1375,24 @@ def _complete_invitation_acceptance(
     *, invitation: WorkspaceInvitation, user: User
 ) -> WorkspaceInvitation:
     """Vergibt Workspace-/Projektzugriff und markiert die Einladung als angenommen."""
-    WorkspaceMembership.objects.update_or_create(
+    membership = WorkspaceMembership.objects.filter(
         workspace=invitation.workspace,
         user=user,
-        defaults={"role": WorkspaceRole.MEMBER, "is_active": True},
-    )
-    ensure_personal_board_for_workspace(user=user, workspace=invitation.workspace)
+    ).first()
+    if membership is None:
+        WorkspaceMembership.objects.create(
+            workspace=invitation.workspace,
+            user=user,
+            role=WorkspaceRole.MEMBER,
+            is_active=True,
+            is_project_guest=invitation.project_id is not None,
+        )
+    else:
+        membership.is_active = True
+        if invitation.project_id is None:
+            membership.is_project_guest = False
+        membership.save(update_fields=("is_active", "is_project_guest", "updated_at"))
+    ensure_personal_board(user=user)
     if invitation.project:
         ProjectParticipant.objects.update_or_create(
             project=invitation.project,
@@ -1204,13 +1416,19 @@ def _complete_invitation_acceptance(
         actor=user,
         kind="member",
         title="Einladung angenommen",
-        body=f"{user.display_name} ist {invitation.workspace.name} beigetreten.",
+        body=(
+            f"{user.display_name} arbeitet jetzt an {invitation.project.name}."
+            if invitation.project
+            else f"{user.display_name} ist {invitation.workspace.name} beigetreten."
+        ),
         icon="how_to_reg",
         route="/members",
     )
     workspace_member_ids = list(
         WorkspaceMembership.objects.filter(
-            workspace=invitation.workspace, is_active=True
+            workspace=invitation.workspace,
+            is_active=True,
+            is_project_guest=False,
         ).values_list("user_id", flat=True)
     )
     transaction.on_commit(
@@ -1224,16 +1442,28 @@ def _complete_invitation_acceptance(
             },
         )
     )
-    transaction.on_commit(
-        lambda: broadcast_inbox_event(
-            workspace_member_ids,
-            "workspace.membership.updated",
-            {
-                "workspaceId": str(invitation.workspace_id),
-                "userId": str(user.id),
-            },
+    if invitation.project_id is None:
+        transaction.on_commit(
+            lambda: broadcast_inbox_event(
+                workspace_member_ids,
+                "workspace.membership.updated",
+                {
+                    "workspaceId": str(invitation.workspace_id),
+                    "userId": str(user.id),
+                },
+            )
         )
-    )
+    else:
+        transaction.on_commit(
+            lambda: broadcast_inbox_event(
+                [invitation.invited_by_id, user.id],
+                "workspace.project.updated",
+                {
+                    "workspaceId": str(invitation.workspace_id),
+                    "projectId": str(invitation.project_id),
+                },
+            )
+        )
     return invitation
 
 

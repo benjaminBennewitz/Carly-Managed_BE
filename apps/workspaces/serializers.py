@@ -580,10 +580,22 @@ class BoardSerializer(serializers.ModelSerializer[Board]):
 
     columns = BoardColumnSerializer(many=True, read_only=True)
     projectId = serializers.UUIDField(source="project_id", allow_null=True, read_only=True)
+    workspaceId = serializers.UUIDField(source="workspace_id", read_only=True)
+    workspaceName = serializers.CharField(source="workspace.name", read_only=True)
 
     class Meta:
         model = Board
-        fields = ("id", "title", "kind", "projectId", "columns", "version", "updated_at")
+        fields = (
+            "id",
+            "title",
+            "kind",
+            "projectId",
+            "workspaceId",
+            "workspaceName",
+            "columns",
+            "version",
+            "updated_at",
+        )
 
 
 class ProjectSerializer(MemberLookupMixin, serializers.ModelSerializer[Project]):
@@ -591,6 +603,8 @@ class ProjectSerializer(MemberLookupMixin, serializers.ModelSerializer[Project])
 
     routeKey = serializers.CharField(source="route_key")
     slugLabel = serializers.CharField(source="slug_label")
+    workspaceId = serializers.UUIDField(source="workspace_id", read_only=True)
+    workspaceName = serializers.CharField(source="workspace.name", read_only=True)
     owner = serializers.SerializerMethodField()
     managers = serializers.SerializerMethodField()
     collaborators = serializers.SerializerMethodField()
@@ -611,11 +625,14 @@ class ProjectSerializer(MemberLookupMixin, serializers.ModelSerializer[Project])
             "id",
             "routeKey",
             "slugLabel",
+            "workspaceId",
+            "workspaceName",
             "name",
             "description",
             "color",
             "icon",
             "status",
+            "visibility",
             "owner",
             "managers",
             "collaborators",
@@ -733,6 +750,7 @@ class ProjectWriteSerializer(serializers.ModelSerializer[Project]):
             "dueAt",
             "color",
             "icon",
+            "visibility",
             "isPinned",
             "allowsOnDemandTasks",
             "version",
@@ -774,6 +792,7 @@ class WorkspaceSerializer(serializers.ModelSerializer[Workspace]):
     """Gibt Workspace-Grunddaten und die aktuelle Rolle aus."""
 
     currentRole = serializers.SerializerMethodField()
+    isPersonalHome = serializers.SerializerMethodField()
 
     class Meta:
         model = Workspace
@@ -782,10 +801,16 @@ class WorkspaceSerializer(serializers.ModelSerializer[Workspace]):
             "name",
             "allow_invites",
             "currentRole",
+            "isPersonalHome",
             "version",
             "created_at",
             "updated_at",
         )
+
+    def get_isPersonalHome(self, obj: Workspace) -> bool:
+        """Kennzeichnet den eigenen Start-Workspace des angemeldeten Nutzers."""
+        request = self.context.get("request")
+        return bool(request and obj.owner_id == request.user.id)
 
     def get_currentRole(self, obj: Workspace) -> str | None:
         """Liefert die Rolle des anfragenden Nutzers."""

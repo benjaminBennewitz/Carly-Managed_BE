@@ -4,7 +4,7 @@
 from django.db.models import Q, QuerySet
 
 from apps.accounts.models import User
-from apps.workspaces.choices import WorkspaceRole
+from apps.workspaces.choices import ProjectVisibility, WorkspaceRole
 from apps.workspaces.models import Board, Project, Task, Workspace, WorkspaceMembership
 
 
@@ -14,8 +14,12 @@ def memberships_for_user(user: User) -> QuerySet[WorkspaceMembership]:
 
 
 def workspaces_for_user(user: User) -> QuerySet[Workspace]:
-    """Liefert alle Workspaces mit aktiver Mitgliedschaft."""
-    return Workspace.objects.filter(memberships__user=user, memberships__is_active=True).distinct()
+    """Liefert echte Team-Mitgliedschaften ohne rein projektbezogene Gastzugriffe."""
+    return Workspace.objects.filter(
+        memberships__user=user,
+        memberships__is_active=True,
+        memberships__is_project_guest=False,
+    ).distinct()
 
 
 def projects_for_user(user: User) -> QuerySet[Project]:
@@ -25,6 +29,12 @@ def projects_for_user(user: User) -> QuerySet[Project]:
             Q(
                 workspace__memberships__user=user,
                 workspace__memberships__role__in=[WorkspaceRole.OWNER, WorkspaceRole.MANAGER],
+            )
+            | Q(
+                workspace__memberships__user=user,
+                workspace__memberships__is_active=True,
+                workspace__memberships__is_project_guest=False,
+                visibility=ProjectVisibility.WORKSPACE,
             )
             | Q(owner=user)
             | Q(participants__user=user),

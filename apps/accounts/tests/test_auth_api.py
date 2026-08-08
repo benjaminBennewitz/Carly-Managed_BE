@@ -73,7 +73,12 @@ def test_registration_bootstraps_complete_personal_context() -> None:
     assert Workspace.objects.filter(owner=user).count() == 1
     assert WorkspaceMembership.objects.filter(user=user, role="owner", is_active=True).exists()
     board = Board.objects.get(owner=user)
-    assert board.columns.count() == 3
+    assert list(board.columns.order_by("position").values_list("title", flat=True)) == [
+        "Neu",
+        "Offen",
+        "In Arbeit",
+        "Erledigt",
+    ]
     assert UserSettings.objects.filter(user=user).exists()
     assert CarlyState.objects.filter(user=user).exists()
     assert (

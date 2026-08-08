@@ -4,7 +4,7 @@
 from rest_framework.exceptions import PermissionDenied
 
 from apps.accounts.models import User
-from apps.workspaces.choices import ProjectRole, WorkspaceRole
+from apps.workspaces.choices import ProjectRole, ProjectVisibility, WorkspaceRole
 from apps.workspaces.models import Board, Project, Workspace, WorkspaceMembership
 
 
@@ -56,6 +56,7 @@ def require_board_editor(*, user: User, board: Board) -> None:
     get_membership(user=user, workspace=board.workspace)
     if not (
         can_manage_project(user=user, project=board.project)
+        or board.project.visibility == ProjectVisibility.WORKSPACE
         or board.project.participants.filter(user=user).exists()
     ):
         raise PermissionDenied("Du darfst dieses Projektboard nicht bearbeiten.")

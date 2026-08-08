@@ -1,6 +1,8 @@
 # apps/inbox/tests/test_inbox_api.py
 """Prüft geschützte Benachrichtigungen und Konversationen."""
 
+from datetime import timedelta
+
 import pytest
 from django.urls import reverse
 from django.utils import timezone
@@ -8,7 +10,7 @@ from rest_framework.test import APIClient
 
 from apps.accounts.models import User
 from apps.inbox.models import SystemNotification
-from apps.workspaces.models import WorkspaceMembership
+from apps.workspaces.models import Project, ProjectParticipant, WorkspaceMembership
 from apps.workspaces.services import bootstrap_personal_workspace
 
 pytestmark = pytest.mark.django_db
@@ -135,3 +137,61 @@ def test_inbox_lists_can_be_limited_to_active_workspace() -> None:
     assert response.status_code == 200
     data = response.data["results"] if isinstance(response.data, dict) else response.data
     assert [item["title"] for item in data] == ["Team"]
+
+def test_project_guest_chat_stays_inside_shared_project_context() -> None:
+    """Erlaubt Projektgästen Chats nur mit Personen aus demselben Projekt."""
+    owner = create_user("owner-guest-chat@example.test", "Owner Guest Chat")
+    guest = create_user("guest-chat@example.test", "Guest Chat")
+    team_member = create_user("member-chat@example.test", "Member Chat")
+    workspace = owner.owned_workspaces.get()
+    WorkspaceMembership.objects.create(
+        workspace=workspace,
+        user=guest,
+        role="member",
+        avatar_color="#6558d3",
+        is_project_guest=True,
+    )
+    WorkspaceMembership.objects.create(
+        workspace=workspace,
+        user=team_member,
+        role="member",
+        avatar_color="#6558d3",
+    )
+    project_response = client_for(owner).post(
+        reverse("project-list"),
+        {
+            "workspaceId": str(workspace.id),
+            "name": "Gastprojekt",
+            "dueAt": str(timezone.localdate() + timedelta(days=30)),
+        },
+        format="json",
+    )
+    assert project_response.status_code == 201
+    project = Project.objects.get(pk=project_response.data["id"])
+    ProjectParticipant.objects.create(project=project, user=guest, role="collaborator")
+
+    guest_client = client_for(guest)
+    accepted = guest_client.post(
+        reverse("conversation-list"),
+        {
+            "workspaceId": str(workspace.id),
+            "participantIds": [str(owner.id)],
+            "subject": "Projektabstimmung",
+            "body": "Nur unser gemeinsames Projekt.",
+        },
+        format="json",
+    )
+    assert accepted.status_code == 201
+
+    rejected = guest_client.post(
+        reverse("conversation-list"),
+        {
+            "workspaceId": str(workspace.id),
+            "participantIds": [str(team_member.id)],
+            "subject": "Fremder Teamkontext",
+            "body": "Dieser Chat darf nicht entstehen.",
+        },
+        format="json",
+    )
+    assert rejected.status_code == 400
+

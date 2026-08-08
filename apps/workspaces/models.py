@@ -27,6 +27,7 @@ from apps.workspaces.choices import (
     JoinRequestStatus,
     ProjectRole,
     ProjectStatus,
+    ProjectVisibility,
     RecurrenceScheduleType,
     TaskPriority,
     WorkspaceRole,
@@ -79,6 +80,7 @@ class WorkspaceMembership(UUIDModel, TimeStampedModel):
         max_length=7, default="#6558d3", validators=[validate_hex_color]
     )
     is_active = models.BooleanField(default=True)
+    is_project_guest = models.BooleanField(default=False)
 
     class Meta:
         ordering = ("user__display_name",)
@@ -116,6 +118,9 @@ class Project(UUIDModel, TimeStampedModel, VersionedModel):
     )
     status = models.CharField(
         max_length=16, choices=ProjectStatus.choices, default=ProjectStatus.ACTIVE
+    )
+    visibility = models.CharField(
+        max_length=16, choices=ProjectVisibility.choices, default=ProjectVisibility.RESTRICTED
     )
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -216,9 +221,9 @@ class Board(UUIDModel, TimeStampedModel, VersionedModel):
                 name="board_kind_target_consistent",
             ),
             models.UniqueConstraint(
-                fields=("workspace", "owner"),
+                fields=("owner",),
                 condition=Q(kind=BoardKind.PERSONAL),
-                name="personal_board_per_workspace_user",
+                name="personal_board_per_user",
             ),
         ]
 
@@ -375,7 +380,11 @@ class Task(UUIDModel, TimeStampedModel, VersionedModel):
             from django.core.exceptions import ValidationError
 
             raise ValidationError({"column": "Die Spalte gehört nicht zu diesem Board."})
-        if self.project_id and self.board.project_id != self.project_id:
+        if (
+            self.project_id
+            and self.board.project_id != self.project_id
+            and not (self.source_task_id or self.source_subtask_id)
+        ):
             from django.core.exceptions import ValidationError
 
             raise ValidationError({"project": "Projekt und Board stimmen nicht überein."})

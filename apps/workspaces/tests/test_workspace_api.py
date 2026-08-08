@@ -162,7 +162,6 @@ def test_project_assignment_is_mirrored_to_personal_new_column() -> None:
     )
     assert created.status_code == 201
     project = workspace.projects.get(pk=created.data["id"])
-    ProjectParticipant.objects.create(project=project, user=member, role="collaborator")
 
     task_response = auth_client(owner).post(
         reverse("task-list"),
@@ -177,9 +176,22 @@ def test_project_assignment_is_mirrored_to_personal_new_column() -> None:
     )
 
     assert task_response.status_code == 201
+    assert ProjectParticipant.objects.filter(
+        project=project, user=member, role="collaborator"
+    ).exists()
+    visible_projects = auth_client(member).get(reverse("project-list"))
+    visible_project_data = (
+        visible_projects.data["results"]
+        if isinstance(visible_projects.data, dict)
+        else visible_projects.data
+    )
+    assert any(item["id"] == str(project.id) for item in visible_project_data)
+
     source = Task.objects.get(pk=task_response.data["id"])
     mirror = Task.objects.get(source_task=source, source_subtask__isnull=True)
     assert mirror.board.owner == member
+    assert mirror.board.workspace.owner == member
+    assert Board.objects.filter(owner=member, kind="personal").count() == 1
     assert mirror.column.system_role == "new-assigned"
     assert mirror.assignee == member
     assert mirror.title == source.title
@@ -413,6 +425,8 @@ def test_subtask_assignment_creates_personal_mirror_for_member() -> None:
     subtask = task.subtasks.get()
     mirror = Task.objects.get(source_subtask=subtask, assignee=member)
     assert mirror.board.owner == member
+    assert mirror.board.workspace.owner == member
+    assert Board.objects.filter(owner=member, kind="personal").count() == 1
     assert mirror.column.system_role == "new-assigned"
 
 
@@ -500,15 +514,19 @@ def test_registered_user_can_accept_in_app_invitation_without_email_verification
         user=invitee,
         is_active=True,
     ).exists()
-    personal_board = Board.objects.get(
-        workspace=workspace, owner=invitee, kind="personal"
+    personal_board = Board.objects.get(owner=invitee, kind="personal")
+    assert personal_board.workspace.owner == invitee
+    assert Board.objects.filter(owner=invitee, kind="personal").count() == 1
+    assert (
+        Board.objects.filter(workspace=workspace, owner=invitee, kind="personal").exists()
+        is False
     )
     personal_task = auth_client(invitee).post(
         reverse("task-list"),
         {
             "boardId": str(personal_board.id),
             "columnId": str(personal_board.columns.first().id),
-            "title": "Eigene Team-Aufgabe",
+            "title": "Eigene persönliche Aufgabe",
         },
         format="json",
     )
@@ -549,7 +567,7 @@ def test_registered_user_can_reject_in_app_invitation() -> None:
 
 
 def test_board_and_archived_task_lists_are_workspace_scoped() -> None:
-    """Verhindert, dass persönliche oder archivierte Daten zwischen Workspaces vermischt werden."""
+    """Hält das globale persönliche Board aus fremden Team-Kontexten heraus."""
     owner = create_user("scope-owner@example.test", "Scope Owner")
     member = create_user("scope-member@example.test", "Scope Member")
     team_workspace = owner.owned_workspaces.get()
@@ -561,6 +579,9 @@ def test_board_and_archived_task_lists_are_workspace_scoped() -> None:
 
     team_board = ensure_personal_board_for_workspace(user=member, workspace=team_workspace)
     personal_board = Board.objects.get(workspace=personal_workspace, owner=member)
+    assert team_board.id == personal_board.id
+    assert Board.objects.filter(owner=member, kind="personal").count() == 1
+
     personal_task = Task.objects.create(
         workspace=personal_workspace,
         board=personal_board,
@@ -574,7 +595,7 @@ def test_board_and_archived_task_lists_are_workspace_scoped() -> None:
     boards = client.get(reverse("board-list"), {"workspaceId": str(team_workspace.id)})
     assert boards.status_code == 200
     board_data = boards.data["results"] if isinstance(boards.data, dict) else boards.data
-    assert [item["id"] for item in board_data] == [str(team_board.id)]
+    assert str(personal_board.id) not in [item["id"] for item in board_data]
 
     archived = client.get(
         reverse("task-list"),
@@ -611,6 +632,167 @@ def test_task_move_maps_frontend_target_position_to_service_argument() -> None:
     assert response.status_code == 200
     task.refresh_from_db()
     assert task.column_id == target_column.id
+
+
+def test_workspace_visible_project_is_available_to_regular_team_members() -> None:
+    """Erlaubt teamweite Projekte, ohne persönliche Boards des Teams freizugeben."""
+    owner = create_user("owner-teamwide@example.test", "Owner Teamwide")
+    member = create_user("member-teamwide@example.test", "Member Teamwide")
+    workspace = owner.owned_workspaces.get()
+    WorkspaceMembership.objects.create(
+        workspace=workspace, user=member, role="member", avatar_color="#6558d3"
+    )
+    created = auth_client(owner).post(
+        reverse("project-list"),
+        {
+            "workspaceId": str(workspace.id),
+            "name": "Teamweites Projekt",
+            "visibility": "workspace",
+            "dueAt": str(timezone.localdate() + timedelta(days=30)),
+        },
+        format="json",
+    )
+    assert created.status_code == 201
+
+    projects = auth_client(member).get(reverse("project-list"))
+    assert projects.status_code == 200
+    project_data = projects.data["results"] if isinstance(projects.data, dict) else projects.data
+    project_item = next(item for item in project_data if item["id"] == created.data["id"] )
+    assert project_item["visibility"] == "workspace"
+
+    project = workspace.projects.get(pk=created.data["id"] )
+    created_task = auth_client(member).post(
+        reverse("task-list"),
+        {
+            "boardId": str(project.board.id),
+            "title": "Teamweiter Task",
+        },
+        format="json",
+    )
+    assert created_task.status_code == 201
+
+    owner_personal_board = Board.objects.get(owner=owner, kind="personal")
+    assert auth_client(member).get(
+        reverse("board-detail", args=[owner_personal_board.id])
+    ).status_code == 404
+
+
+def test_project_manager_can_invite_to_project_without_workspace_admin_role() -> None:
+    """Trennt Projekteinladungen von globalen Workspace-Verwaltungsrechten."""
+    owner = create_user("owner-project-invite@example.test", "Owner Project Invite")
+    manager = create_user("manager-project-invite@example.test", "Manager Project Invite")
+    invitee = create_user("invitee-project-invite@example.test", "Invitee Project Invite")
+    workspace = owner.owned_workspaces.get()
+    WorkspaceMembership.objects.create(
+        workspace=workspace, user=manager, role="member", avatar_color="#6558d3"
+    )
+    project_response = auth_client(owner).post(
+        reverse("project-list"),
+        {
+            "workspaceId": str(workspace.id),
+            "name": "Projekt mit Manager",
+            "dueAt": str(timezone.localdate() + timedelta(days=30)),
+        },
+        format="json",
+    )
+    assert project_response.status_code == 201
+    project = workspace.projects.get(pk=project_response.data["id"] )
+    ProjectParticipant.objects.create(project=project, user=manager, role="manager")
+
+    manager_client = auth_client(manager)
+    workspace_invite = manager_client.post(
+        reverse("invitation-list"),
+        {
+            "workspaceId": str(workspace.id),
+            "email": invitee.email,
+            "projectId": None,
+        },
+        format="json",
+    )
+    assert workspace_invite.status_code == 403
+
+    project_invite = manager_client.post(
+        reverse("invitation-list"),
+        {
+            "workspaceId": str(workspace.id),
+            "email": invitee.email,
+            "projectId": str(project.id),
+        },
+        format="json",
+    )
+    assert project_invite.status_code == 201
+
+    accepted = auth_client(invitee).post(
+        reverse("invitation-accept-received", args=[project_invite.data["id"]]),
+        {},
+        format="json",
+    )
+    assert accepted.status_code == 200
+    guest_membership = WorkspaceMembership.objects.get(
+        workspace=workspace, user=invitee, is_active=True
+    )
+    assert guest_membership.is_project_guest is True
+    assert ProjectParticipant.objects.filter(
+        project=project, user=invitee, role="collaborator"
+    ).exists()
+    workspace_list = auth_client(invitee).get(reverse("workspace-list"))
+    workspace_items = (
+        workspace_list.data["results"]
+        if isinstance(workspace_list.data, dict)
+        else workspace_list.data
+    )
+    assert all(item["id"] != str(workspace.id) for item in workspace_items)
+    member_list = auth_client(owner).get(reverse("workspace-members", args=[workspace.id]))
+    assert all(item["id"] != str(invitee.id) for item in member_list.data)
+
+    teamwide = auth_client(owner).post(
+        reverse("project-list"),
+        {
+            "workspaceId": str(workspace.id),
+            "name": "Anderes teamweites Projekt",
+            "visibility": "workspace",
+            "dueAt": str(timezone.localdate() + timedelta(days=30)),
+        },
+        format="json",
+    )
+    assert teamwide.status_code == 201
+    visible_projects = auth_client(invitee).get(reverse("project-list"))
+    visible_items = (
+        visible_projects.data["results"]
+        if isinstance(visible_projects.data, dict)
+        else visible_projects.data
+    )
+    visible_ids = {item["id"] for item in visible_items}
+    assert str(project.id) in visible_ids
+    assert teamwide.data["id"] not in visible_ids
+
+    team_invite = auth_client(owner).post(
+        reverse("invitation-list"),
+        {
+            "workspaceId": str(workspace.id),
+            "email": invitee.email,
+            "projectId": None,
+        },
+        format="json",
+    )
+    assert team_invite.status_code == 201
+    team_accept = auth_client(invitee).post(
+        reverse("invitation-accept-received", args=[team_invite.data["id"]]),
+        {},
+        format="json",
+    )
+    assert team_accept.status_code == 200
+    guest_membership.refresh_from_db()
+    assert guest_membership.is_project_guest is False
+    upgraded_projects = auth_client(invitee).get(reverse("project-list"))
+    upgraded_items = (
+        upgraded_projects.data["results"]
+        if isinstance(upgraded_projects.data, dict)
+        else upgraded_projects.data
+    )
+    assert teamwide.data["id"] in {item["id"] for item in upgraded_items}
+    assert Board.objects.filter(owner=invitee, kind="personal").count() == 1
+    assert Board.objects.get(owner=invitee, kind="personal").workspace.owner == invitee
 
 
 def test_members_endpoint_uses_app_presence_from_inbox_socket_cache() -> None:

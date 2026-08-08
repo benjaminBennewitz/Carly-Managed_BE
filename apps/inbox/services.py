@@ -12,7 +12,23 @@ from rest_framework.exceptions import ValidationError
 from apps.accounts.models import User
 from apps.inbox.models import ChatMessage, Conversation, ConversationParticipant, SystemNotification
 from apps.preferences.rewards import award_carly_reward_safely
-from apps.workspaces.models import Workspace, WorkspaceMembership
+from apps.workspaces.models import Project, Workspace, WorkspaceMembership
+
+
+def users_share_project_context(*, workspace: Workspace, users: Iterable[User]) -> bool:
+    """Prüft, ob alle Personen mindestens ein gemeinsames Projekt im Workspace besitzen."""
+    user_ids = {user.id for user in users}
+    if not user_ids:
+        return False
+    projects = Project.objects.filter(workspace=workspace).prefetch_related("participants")
+    for project in projects:
+        project_user_ids = {project.owner_id}
+        project_user_ids.update(
+            participant.user_id for participant in project.participants.all()
+        )
+        if user_ids.issubset(project_user_ids):
+            return True
+    return False
 
 
 def _broadcast_inbox(user_ids: Iterable[Any], event_type: str, payload: dict[str, Any]) -> None:
@@ -65,13 +81,21 @@ def create_conversation(
 ) -> Conversation:
     """Erstellt ein Gespräch einschließlich Eröffnungsnachricht."""
     unique_users = {user.id: user for user in [creator, *participants]}
-    active_ids = set(
+    memberships = list(
         WorkspaceMembership.objects.filter(
             workspace=workspace, user_id__in=unique_users, is_active=True
-        ).values_list("user_id", flat=True)
+        )
     )
+    active_ids = {membership.user_id for membership in memberships}
     if set(unique_users) != active_ids:
-        raise ValidationError("Alle Teilnehmenden müssen aktive Workspace-Mitglieder sein.")
+        raise ValidationError("Alle Teilnehmenden müssen einen gültigen Team-Kontext besitzen.")
+    has_project_guest = any(membership.is_project_guest for membership in memberships)
+    if has_project_guest and not users_share_project_context(
+        workspace=workspace, users=unique_users.values()
+    ):
+        raise ValidationError(
+            "Projektgäste können nur mit Personen aus einem gemeinsamen Projekt schreiben."
+        )
     conversation = Conversation.objects.create(workspace=workspace, created_by=creator)
     ConversationParticipant.objects.bulk_create(
         [

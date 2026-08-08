@@ -27,6 +27,13 @@ class ProjectStatus(models.TextChoices):
     ARCHIVED = "archived", "Archiviert"
 
 
+class ProjectVisibility(models.TextChoices):
+    """Steuert, ob ein Projekt teamweit oder nur explizit freigegeben ist."""
+
+    RESTRICTED = "restricted", "Eingeschränkt"
+    WORKSPACE = "workspace", "Teamweit"
+
+
 class BoardKind(models.TextChoices):
     """Unterscheidet persönliche und projektbezogene Boards."""
 
