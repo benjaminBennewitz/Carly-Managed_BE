@@ -576,7 +576,13 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
         require_board_editor(user=request.user, board=task.board)
         serializer = MoveTaskSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        updated = move_task(task=task, actor=request.user, **serializer.validated_data)
+        updated = move_task(
+            task=task,
+            actor=request.user,
+            target_column=serializer.validated_data["target_column"],
+            target_position=serializer.validated_data["target_position"],
+            supplied_version=serializer.validated_data["version"],
+        )
         updated = self.get_queryset().get(pk=updated.pk)
         return Response(TaskSerializer(updated, context=_serializer_context(self)).data)
 
