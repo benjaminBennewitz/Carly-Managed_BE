@@ -4,13 +4,21 @@
 from datetime import timedelta
 
 import pytest
+from django.db.models import Max
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import User
-from apps.workspaces.models import Board, ProjectParticipant, Task, WorkspaceMembership
+from apps.workspaces.models import (
+    Board,
+    BoardColumn,
+    ProjectParticipant,
+    Task,
+    Workspace,
+    WorkspaceMembership,
+)
 from apps.workspaces.services import bootstrap_personal_workspace
 
 pytestmark = pytest.mark.django_db
@@ -816,3 +824,201 @@ def test_members_endpoint_uses_app_presence_from_inbox_socket_cache() -> None:
         assert payload[str(member.id)]["isOnline"] is True
     finally:
         leave_app_presence(member.id)
+
+
+def test_personal_quick_task_can_be_handed_to_team_member() -> None:
+    """Legt eine persönliche Schnellaufgabe direkt im privaten Intake des Empfängers ab."""
+    owner = create_user("owner-handoff@example.test", "Owner Handoff")
+    member = create_user("member-handoff@example.test", "Member Handoff")
+    team = Workspace.objects.get(owner=owner)
+    WorkspaceMembership.objects.create(
+        workspace=team,
+        user=member,
+        role="member",
+        avatar_color="#6558d3",
+    )
+    owner_board = Board.objects.get(owner=owner)
+
+    response = auth_client(owner).post(
+        reverse("task-list"),
+        {
+            "boardId": str(owner_board.id),
+            "title": "Direkt an Julia",
+            "assigneeId": str(member.id),
+        },
+        format="json",
+    )
+
+    assert response.status_code == 201
+    task = Task.objects.get(pk=response.data["id"])
+    assert task.assignee == member
+    assert task.board.owner == member
+    assert task.column.system_role == "new-assigned"
+    assert Board.objects.filter(owner=member, kind="personal").count() == 1
+
+
+def test_pool_task_claim_moves_canonical_task_to_personal_intake() -> None:
+    """Entfernt eine übernommene Poolaufgabe aus dem Pool und legt sie nur privat ab."""
+    owner = create_user("owner-pool-claim@example.test", "Owner Pool")
+    team = Workspace.objects.get(owner=owner)
+    project_response = auth_client(owner).post(
+        reverse("project-list"),
+        {
+            "workspaceId": str(team.id),
+            "name": "Pool Projekt",
+            "dueAt": str(timezone.localdate() + timedelta(days=14)),
+        },
+        format="json",
+    )
+    project = team.projects.get(pk=project_response.data["id"])
+    pool_response = auth_client(owner).post(
+        reverse("task-list"),
+        {
+            "boardId": str(project.board.id),
+            "title": "Pool Aufgabe",
+            "assigneeId": None,
+            "isSharedPool": True,
+        },
+        format="json",
+    )
+    task_id = pool_response.data["id"]
+
+    claimed = auth_client(owner).post(
+        reverse("task-claim", args=[task_id]),
+        {"assigneeId": str(owner.id)},
+        format="json",
+    )
+
+    assert claimed.status_code == 200
+    task = Task.objects.get(pk=task_id)
+    assert task.is_shared_pool is False
+    assert task.project is None
+    assert task.board.owner == owner
+    assert task.column.system_role == "new-assigned"
+    pool = auth_client(owner).get(reverse("task-list"), {"pool": "true"})
+    assert all(item["id"] != str(task.id) for item in pool.data["results"])
+
+
+def test_column_with_tasks_can_be_moved_and_deleted_atomically() -> None:
+    """Bietet für belegte Spalten einen sicheren Move-and-delete-Vertrag."""
+    owner = create_user("owner-column-delete@example.test", "Owner Column")
+    board = Board.objects.get(owner=owner)
+    target = board.columns.exclude(system_role="new-assigned").first()
+    maximum_position = board.columns.aggregate(value=Max("position"))["value"]
+    source = BoardColumn.objects.create(
+        board=board,
+        title="Temporär",
+        color="#7752B3",
+        position=0 if maximum_position is None else maximum_position + 1,
+    )
+    task = Task.objects.create(
+        workspace=board.workspace,
+        board=board,
+        column=source,
+        owner=owner,
+        assignee=owner,
+        title="Vor dem Löschen verschieben",
+    )
+    client = auth_client(owner)
+
+    blocked = client.delete(
+        f'{reverse("column-detail", args=[source.id])}?version={source.version}'
+    )
+    assert blocked.status_code == 409
+
+    deleted = client.post(
+        reverse("column-delete-with-move", args=[source.id]),
+        {"targetColumnId": str(target.id), "version": source.version},
+        format="json",
+    )
+
+    assert deleted.status_code == 204
+    assert BoardColumn.objects.filter(pk=source.id).exists() is False
+    task.refresh_from_db()
+    assert task.column == target
+    positions = list(
+        board.columns.order_by("position").values_list("position", flat=True)
+    )
+    assert positions == list(range(len(positions)))
+
+
+def test_team_owner_can_create_update_and_delete_additional_team() -> None:
+    """Deckt den vollständigen Team-Lebenszyklus ohne neues persönliches Board ab."""
+    owner = create_user("owner-team-crud@example.test", "Owner Teams")
+    client = auth_client(owner)
+    personal_board_id = Board.objects.get(owner=owner).id
+
+    created = client.post(
+        reverse("workspace-list"),
+        {"name": "Design Crew", "allowInvites": False},
+        format="json",
+    )
+    assert created.status_code == 201
+    team_id = created.data["id"]
+    assert created.data["allowInvites"] is False
+    assert created.data["isPersonalHome"] is False
+    assert Board.objects.get(owner=owner).id == personal_board_id
+
+    updated = client.patch(
+        reverse("workspace-detail", args=[team_id]),
+        {
+            "name": "Design Crew Plus",
+            "allowInvites": True,
+            "version": created.data["version"],
+        },
+        format="json",
+    )
+    assert updated.status_code == 200
+    assert updated.data["name"] == "Design Crew Plus"
+    assert updated.data["allowInvites"] is True
+
+    deleted = client.delete(
+        f'{reverse("workspace-detail", args=[team_id])}?version={updated.data["version"]}'
+    )
+    assert deleted.status_code == 204
+    assert Workspace.objects.filter(pk=team_id).exists() is False
+
+
+def test_disabled_team_invites_block_manager_but_not_project_manager_invites() -> None:
+    """Trennt Team-Einladungsrecht von rein projektbezogenen Verwaltungsrechten."""
+    owner = create_user("owner-invite-policy@example.test", "Owner Invite")
+    manager = create_user("manager-invite-policy@example.test", "Manager Invite")
+    invitee = create_user("invitee-policy@example.test", "Invitee Policy")
+    team = Workspace.objects.get(owner=owner)
+    team.allow_invites = False
+    team.save(update_fields=("allow_invites", "updated_at"))
+    WorkspaceMembership.objects.create(
+        workspace=team,
+        user=manager,
+        role="manager",
+        avatar_color="#6558d3",
+    )
+    project_response = auth_client(owner).post(
+        reverse("project-list"),
+        {
+            "workspaceId": str(team.id),
+            "name": "Manager Projekt",
+            "dueAt": str(timezone.localdate() + timedelta(days=14)),
+        },
+        format="json",
+    )
+    project = team.projects.get(pk=project_response.data["id"])
+    ProjectParticipant.objects.create(project=project, user=manager, role="manager")
+
+    team_invite = auth_client(manager).post(
+        reverse("invitation-list"),
+        {"workspaceId": str(team.id), "email": invitee.email},
+        format="json",
+    )
+    assert team_invite.status_code == 409
+
+    project_invite = auth_client(manager).post(
+        reverse("invitation-list"),
+        {
+            "workspaceId": str(team.id),
+            "projectId": str(project.id),
+            "email": invitee.email,
+        },
+        format="json",
+    )
+    assert project_invite.status_code == 201

@@ -4,7 +4,7 @@
 from typing import Any
 
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Max, Q
 from django.http import FileResponse
 from django.utils import timezone
 from django.utils.http import content_disposition_header
@@ -51,6 +51,7 @@ from apps.workspaces.permissions import (
 )
 from apps.workspaces.selectors import (
     boards_for_user,
+    pool_tasks_for_user,
     projects_for_user,
     tasks_for_user,
     workspaces_for_user,
@@ -61,6 +62,7 @@ from apps.workspaces.serializers import (
     BoardColumnSerializer,
     BoardColumnWriteSerializer,
     BoardSerializer,
+    ColumnDeleteWithMoveSerializer,
     ColumnReorderSerializer,
     CommentSerializer,
     CommentWriteSerializer,
@@ -69,6 +71,7 @@ from apps.workspaces.serializers import (
     InvitationSerializer,
     JoinRequestSerializer,
     MoveTaskSerializer,
+    PoolClaimSerializer,
     ProjectSerializer,
     ProjectWriteSerializer,
     RecurrenceRuleSerializer,
@@ -79,6 +82,7 @@ from apps.workspaces.serializers import (
     VersionSerializer,
     WorkspaceMemberSerializer,
     WorkspaceSerializer,
+    WorkspaceWriteSerializer,
 )
 from apps.workspaces.services import (
     accept_invitation,
@@ -87,6 +91,7 @@ from apps.workspaces.services import (
     assert_version,
     create_invitation,
     cleanup_unused_project_guests,
+    claim_pool_task,
     create_project,
     ensure_personal_board,
     create_subtask,
@@ -115,16 +120,104 @@ def _broadcast_board(board_id: Any, event_type: str, payload: dict[str, Any]) ->
     transaction.on_commit(lambda: broadcast_board_event(board_id, event_type, payload))
 
 
-class WorkspaceViewSet(viewsets.ReadOnlyModelViewSet[Workspace]):
-    """Liest zugängliche Workspaces und verwaltet deren Mitglieder."""
+def _reindex_board_columns(board: Board) -> None:
+    """Verdichtet Spaltenpositionen ohne temporäre Unique-Konflikte."""
+    columns = list(board.columns.order_by("position", "created_at", "id"))
+    if not columns:
+        return
+
+    maximum_position = max(column.position for column in columns)
+    temporary_base = maximum_position + len(columns) + 1
+    temporary_timestamp = timezone.now()
+    for offset, column in enumerate(columns):
+        column.position = temporary_base + offset
+        column.updated_at = temporary_timestamp
+    BoardColumn.objects.bulk_update(columns, ("position", "updated_at"))
+
+    final_timestamp = timezone.now()
+    for position, column in enumerate(columns):
+        column.position = position
+        column.updated_at = final_timestamp
+    BoardColumn.objects.bulk_update(columns, ("position", "updated_at"))
+
+
+class WorkspaceViewSet(viewsets.ModelViewSet[Workspace]):
+    """Verwaltet echte Teams und deren Mitglieder unabhängig vom persönlichen Board."""
 
     queryset = Workspace.objects.none()
     serializer_class = WorkspaceSerializer
     pagination_class = None
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
-        """Begrenzt die Liste auf aktive Mitgliedschaften."""
+        """Begrenzt die Liste auf aktive, nicht rein projektbezogene Mitgliedschaften."""
         return workspaces_for_user(self.request.user).prefetch_related("memberships__user")
+
+    def get_serializer_class(self):
+        """Trennt die Team-Schreibfelder vom erweiterten Ausgabevertrag."""
+        if self.action in {"create", "partial_update", "update"}:
+            return WorkspaceWriteSerializer
+        return WorkspaceSerializer
+
+    def create(self, request: Any, *args: Any, **kwargs: Any) -> Response:
+        """Erstellt ein neues Team, ohne ein weiteres persönliches Board anzulegen."""
+        serializer = WorkspaceWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated = dict(serializer.validated_data)
+        validated.pop("version", None)
+        name = str(validated.get("name", "")).strip()
+        if Workspace.objects.filter(owner=request.user, name__iexact=name).exists():
+            raise ValidationError({"name": "Ein Team mit diesem Namen existiert bereits."})
+        validated["name"] = name
+        with transaction.atomic():
+            workspace = Workspace.objects.create(owner=request.user, **validated)
+            WorkspaceMembership.objects.create(
+                workspace=workspace,
+                user=request.user,
+                role=WorkspaceRole.OWNER,
+                is_active=True,
+                is_project_guest=False,
+            )
+        return Response(
+            WorkspaceSerializer(workspace, context=_serializer_context(self)).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    def partial_update(self, request: Any, *args: Any, **kwargs: Any) -> Response:
+        """Bearbeitet Teamname und Einladungsregel unter Versionskontrolle."""
+        workspace = self.get_object()
+        require_workspace_manager(user=request.user, workspace=workspace)
+        serializer = WorkspaceWriteSerializer(
+            workspace, data=request.data, partial=True, context=_serializer_context(self)
+        )
+        serializer.is_valid(raise_exception=True)
+        supplied_version = serializer.validated_data.pop("version", None)
+        with transaction.atomic():
+            locked = Workspace.objects.select_for_update().get(pk=workspace.pk)
+            assert_version(locked, supplied_version)
+            for field, value in serializer.validated_data.items():
+                setattr(locked, field, value)
+            increment_version(locked)
+            locked.full_clean()
+            locked.save()
+        return Response(WorkspaceSerializer(locked, context=_serializer_context(self)).data)
+
+    def destroy(self, request: Any, *args: Any, **kwargs: Any) -> Response:
+        """Löscht ein eigenes Team, schützt aber den persönlichen Basis-Workspace."""
+        workspace = self.get_object()
+        if workspace.owner_id != request.user.id:
+            raise PermissionDenied("Nur der Team-Owner kann dieses Team löschen.")
+        if Board.objects.filter(
+            workspace=workspace, owner=request.user, kind=BoardKind.PERSONAL
+        ).exists():
+            raise ConflictError("Der persönliche Basis-Workspace kann nicht gelöscht werden.")
+        serializer = VersionSerializer(data={"version": request.query_params.get("version")})
+        serializer.is_valid(raise_exception=True)
+        with transaction.atomic():
+            locked = Workspace.objects.select_for_update().get(pk=workspace.pk)
+            assert_version(locked, serializer.validated_data["version"])
+            locked.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=["get", "patch", "delete"], url_path="members")
     def members(self, request: Any, pk: str | None = None) -> Response:
@@ -359,7 +452,8 @@ class BoardViewSet(viewsets.ReadOnlyModelViewSet[Board]):
         with transaction.atomic():
             locked_board = Board.objects.select_for_update().get(pk=board.pk)
             assert_version(locked_board, request.data.get("boardVersion"))
-            position = locked_board.columns.count()
+            maximum_position = locked_board.columns.aggregate(value=Max("position"))["value"]
+            position = 0 if maximum_position is None else maximum_position + 1
             column = BoardColumn.objects.create(
                 board=locked_board, position=position, **serializer.validated_data
             )
@@ -446,6 +540,62 @@ class BoardColumnViewSet(
             )
         return Response(BoardColumnSerializer(locked, context=_serializer_context(self)).data)
 
+    @action(detail=True, methods=["post"], url_path="delete-with-move")
+    def delete_with_move(self, request: Any, pk: str | None = None) -> Response:
+        """Verschiebt aktive Tasks atomar in eine Zielspalte und löscht danach die Quelle."""
+        column = self.get_object()
+        require_board_editor(user=request.user, board=column.board)
+        if column.board.project:
+            require_project_manager(user=request.user, project=column.board.project)
+        if column.is_fixed_position or column.system_role:
+            raise ConflictError("Diese Systemspalte darf nicht gelöscht werden.")
+        serializer = ColumnDeleteWithMoveSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        target = serializer.validated_data["target_column"]
+        if target.board_id != column.board_id or target.id == column.id:
+            raise ValidationError({"targetColumnId": "Die Zielspalte gehört nicht zum Board."})
+
+        with transaction.atomic():
+            locked = BoardColumn.objects.select_for_update().get(pk=column.pk)
+            locked_target = BoardColumn.objects.select_for_update().get(pk=target.pk)
+            assert_version(locked, serializer.validated_data["version"])
+            moving = list(
+                Task.objects.select_for_update()
+                .filter(column=locked, archived_at__isnull=True)
+                .order_by("position", "created_at")
+            )
+            target_position = (
+                Task.objects.filter(column=locked_target, archived_at__isnull=True)
+                .aggregate(value=Max("position"))["value"]
+            )
+            next_position = 0 if target_position is None else target_position + 1
+            for offset, task in enumerate(moving):
+                task.column = locked_target
+                task.position = next_position + offset
+                increment_version(task)
+            if moving:
+                Task.objects.bulk_update(
+                    moving, ("column", "position", "version", "updated_at")
+                )
+
+            board = Board.objects.select_for_update().get(pk=locked.board_id)
+            deleted_id = str(locked.id)
+            locked.delete()
+            _reindex_board_columns(board)
+            increment_version(board)
+            board.save(update_fields=("version", "updated_at"))
+            _broadcast_board(
+                board.id,
+                "column.deleted",
+                {
+                    "columnId": deleted_id,
+                    "targetColumnId": str(locked_target.id),
+                    "movedTaskIds": [str(task.id) for task in moving],
+                    "version": board.version,
+                },
+            )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
     def destroy(self, request: Any, *args: Any, **kwargs: Any) -> Response:
         """Löscht eine leere, nicht reservierte Spalte."""
         column = self.get_object()
@@ -463,10 +613,7 @@ class BoardColumnViewSet(
             assert_version(locked, serializer.validated_data["version"])
             board = Board.objects.select_for_update().get(pk=locked.board_id)
             locked.delete()
-            remaining = list(board.columns.order_by("position"))
-            for position, item in enumerate(remaining):
-                item.position = position
-            BoardColumn.objects.bulk_update(remaining, ("position", "updated_at"))
+            _reindex_board_columns(board)
             increment_version(board)
             board.save(update_fields=("version", "updated_at"))
             _broadcast_board(
@@ -487,7 +634,11 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
 
     def get_queryset(self):
         """Filtert Tasks nach Board, Projekt, Pool, Archiv und Zuweisung."""
-        queryset = tasks_for_user(self.request.user)
+        queryset = (
+            pool_tasks_for_user(self.request.user)
+            if self.request.query_params.get("pool") == "true"
+            else tasks_for_user(self.request.user)
+        )
         workspace_id = self.request.query_params.get("workspaceId")
         board_id = self.request.query_params.get("boardId")
         project_id = self.request.query_params.get("projectId")
@@ -531,11 +682,41 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
         task = create_task(
             board=board, actor=request.user, validated_data=dict(serializer.validated_data)
         )
-        task = self.get_queryset().get(pk=task.pk)
+        task = (
+            Task.objects.select_related(
+                "workspace", "board", "column", "project", "owner", "assignee"
+            )
+            .prefetch_related(
+                "collaborators",
+                "subtasks__assignee",
+                "comments__author",
+                "comments__mentions",
+                "attachments__uploaded_by",
+                "history__actor",
+            )
+            .get(pk=task.pk)
+        )
         return Response(
             TaskSerializer(task, context=_serializer_context(self)).data,
             status=status.HTTP_201_CREATED,
         )
+
+    @action(detail=True, methods=["post"], url_path="claim")
+    def claim(self, request: Any, pk: str | None = None) -> Response:
+        """Übernimmt eine sichtbare Poolaufgabe in das persönliche Board einer Person."""
+        task = pool_tasks_for_user(request.user).filter(pk=pk).first()
+        if task is None:
+            raise NotFound("Poolaufgabe nicht gefunden.")
+        serializer = PoolClaimSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        assignee = serializer.validated_data.get("assignee", request.user)
+        if assignee != request.user:
+            if task.project:
+                require_project_manager(user=request.user, project=task.project)
+            else:
+                require_workspace_manager(user=request.user, workspace=task.workspace)
+        claimed = claim_pool_task(task=task, actor=request.user, assignee=assignee)
+        return Response(TaskSerializer(claimed, context=_serializer_context(self)).data)
 
     def partial_update(self, request: Any, *args: Any, **kwargs: Any) -> Response:
         """Aktualisiert einen Task mit Konflikterkennung."""
@@ -1051,8 +1232,10 @@ class InvitationViewSet(
             if workspace is None:
                 raise NotFound("Workspace nicht gefunden.")
             require_workspace_manager(user=request.user, workspace=workspace)
+        invitation_data = dict(serializer.validated_data)
+        invitation_data["project"] = project
         invitation, _ = create_invitation(
-            workspace=workspace, actor=request.user, **serializer.validated_data
+            workspace=workspace, actor=request.user, **invitation_data
         )
         return Response(InvitationSerializer(invitation).data, status=status.HTTP_201_CREATED)
 

@@ -81,3 +81,37 @@ def tasks_for_user(user: User) -> QuerySet[Task]:
         )
         .distinct()
     )
+
+
+def pool_tasks_for_user(user: User) -> QuerySet[Task]:
+    """Liefert offene Poolaufgaben aus echten Teams und explizit freigegebenen Projekten."""
+    workspace_ids = workspaces_for_user(user).values("id")
+    project_ids = projects_for_user(user).values("id")
+    return (
+        Task.objects.filter(
+            Q(project_id__in=project_ids)
+            | Q(project__isnull=True, workspace_id__in=workspace_ids),
+            is_shared_pool=True,
+            archived_at__isnull=True,
+        )
+        .select_related(
+            "workspace",
+            "board",
+            "column",
+            "project",
+            "owner",
+            "assignee",
+            "parent_task",
+            "source_task",
+            "source_subtask",
+        )
+        .prefetch_related(
+            "collaborators",
+            "subtasks__assignee",
+            "comments__author",
+            "comments__mentions",
+            "attachments__uploaded_by",
+            "history__actor",
+        )
+        .distinct()
+    )

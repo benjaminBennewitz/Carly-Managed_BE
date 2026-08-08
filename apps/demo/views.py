@@ -8,7 +8,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.demo.permissions import CanResetDemoData
+from apps.demo.permissions import CanResetDemoData, can_reset_demo_data
 from apps.demo.serializers import DemoResetResultSerializer, DemoStatusSerializer
 from apps.demo.services import reset_demo_workspace
 from apps.demo.throttles import DemoResetRateThrottle
@@ -21,13 +21,9 @@ class DemoStatusView(APIView):
 
     @extend_schema(responses={200: DemoStatusSerializer})
     def get(self, request: Request) -> Response:
-        """Bewertet Feature-Flag, Umgebung und Staff-Status ohne Seiteneffekt."""
+        """Bewertet Feature-Flag, Umgebung und Berechtigung ohne Seiteneffekt."""
         enabled = bool(settings.DEMO_DATA_RESET_ENABLED)
-        can_reset = bool(
-            enabled
-            and request.user.is_staff
-            and (settings.DEBUG or settings.DEMO_DATA_RESET_ALLOW_PRODUCTION)
-        )
+        can_reset = can_reset_demo_data(request.user)
         return Response(
             {
                 "enabled": enabled,
@@ -38,7 +34,7 @@ class DemoStatusView(APIView):
 
 
 class DemoResetView(APIView):
-    """Setzt ausschließlich den Demo-Workspace des angemeldeten Staff-Nutzers zurück."""
+    """Setzt die abgegrenzten Testdaten des angemeldeten Nutzers zurück."""
 
     permission_classes = [CanResetDemoData]
     throttle_classes = [DemoResetRateThrottle]

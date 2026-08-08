@@ -222,3 +222,30 @@ def test_carly_settings_reset_preserves_economy() -> None:
     assert response.data["progress"]["credits"] == 123
     assert response.data["progress"]["experience"] == 87
     assert response.data["progress"]["inventory"]["cookie"] == 3
+
+
+def test_reward_history_marks_first_reward_after_daily_hard_cap() -> None:
+    """Kennzeichnet das erreichte Tageslimit für ein einmaliges verständliches UI-Feedback."""
+    user = create_user()
+    award_carly_reward(
+        user=user,
+        event_type="test_daily_cap",
+        event_key="test-daily-cap:fill",
+        source_type="test",
+        source_id="fill",
+        xp=300,
+        credits=0,
+    )
+
+    capped = award_carly_reward(
+        user=user,
+        event_type="task_created",
+        event_key="task-created:after-cap",
+        source_type="task",
+        source_id="after-cap",
+    )
+
+    assert capped.xp == 0
+    log = CarlyRewardLog.objects.get(event_key="task-created:after-cap")
+    assert log.metadata["dailyLimitReached"] is True
+    assert log.metadata["dailyLimitKinds"] == ["xp"]

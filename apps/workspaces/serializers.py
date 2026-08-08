@@ -493,9 +493,21 @@ class TaskWriteSerializer(serializers.ModelSerializer[Task]):
         assignee = attrs.get("assignee", getattr(task, "assignee", None))
         collaborators = attrs.get("collaborators")
         if board.kind == BoardKind.PERSONAL and assignee and assignee.id != board.owner_id:
-            raise serializers.ValidationError(
-                {"assigneeId": "Persönliche Aufgaben können nur dir selbst zugewiesen werden."}
-            )
+            request = self.context.get("request")
+            actor = getattr(request, "user", None)
+            actor_workspace_ids = WorkspaceMembership.objects.filter(
+                user=actor, is_active=True, is_project_guest=False
+            ).values("workspace_id")
+            shares_team = WorkspaceMembership.objects.filter(
+                user=assignee,
+                workspace_id__in=actor_workspace_ids,
+                is_active=True,
+                is_project_guest=False,
+            ).exists()
+            if not shares_team:
+                raise serializers.ValidationError(
+                    {"assigneeId": "Aufgaben können nur Personen aus deinen Teams zugewiesen werden."}
+                )
         if board.kind == BoardKind.PERSONAL and collaborators:
             raise serializers.ValidationError(
                 {"collaboratorIds": "Persönliche Aufgaben können nicht geteilt werden."}
@@ -510,15 +522,16 @@ class TaskWriteSerializer(serializers.ModelSerializer[Task]):
         user_ids = [user.id for user in ([assignee] if assignee else [])]
         if collaborators is not None:
             user_ids.extend(user.id for user in collaborators)
-        active_ids = set(
-            WorkspaceMembership.objects.filter(
-                workspace=workspace, user_id__in=user_ids, is_active=True
-            ).values_list("user_id", flat=True)
-        )
-        if any(user_id not in active_ids for user_id in user_ids):
-            raise serializers.ValidationError(
-                "Zuweisungen sind nur an aktive Workspace-Mitglieder möglich."
+        if board.kind != BoardKind.PERSONAL:
+            active_ids = set(
+                WorkspaceMembership.objects.filter(
+                    workspace=workspace, user_id__in=user_ids, is_active=True
+                ).values_list("user_id", flat=True)
             )
+            if any(user_id not in active_ids for user_id in user_ids):
+                raise serializers.ValidationError(
+                    "Zuweisungen sind nur an aktive Workspace-Mitglieder möglich."
+                )
         if start_date and due_date and due_date < start_date:
             raise serializers.ValidationError(
                 {"dueDate": "Das Fälligkeitsdatum liegt vor dem Startdatum."}
@@ -563,7 +576,11 @@ class BoardColumnSerializer(serializers.ModelSerializer[BoardColumn]):
 
     def get_tasks(self, obj: BoardColumn) -> list[dict[str, Any]]:
         """Liefert nicht archivierte Tasks in gespeicherter Reihenfolge."""
-        tasks = [task for task in obj.tasks.all() if task.archived_at is None]
+        tasks = [
+            task
+            for task in obj.tasks.all()
+            if task.archived_at is None and not task.is_shared_pool
+        ]
         return TaskSerializer(tasks, many=True, context=self.context).data
 
     def get_sortMode(self, obj: BoardColumn) -> str | None:
@@ -789,8 +806,9 @@ class ProjectWriteSerializer(serializers.ModelSerializer[Project]):
 
 
 class WorkspaceSerializer(serializers.ModelSerializer[Workspace]):
-    """Gibt Workspace-Grunddaten und die aktuelle Rolle aus."""
+    """Gibt Team-Grunddaten und die aktuelle Rolle aus."""
 
+    allowInvites = serializers.BooleanField(source="allow_invites")
     currentRole = serializers.SerializerMethodField()
     isPersonalHome = serializers.SerializerMethodField()
 
@@ -799,7 +817,7 @@ class WorkspaceSerializer(serializers.ModelSerializer[Workspace]):
         fields = (
             "id",
             "name",
-            "allow_invites",
+            "allowInvites",
             "currentRole",
             "isPersonalHome",
             "version",
@@ -808,9 +826,15 @@ class WorkspaceSerializer(serializers.ModelSerializer[Workspace]):
         )
 
     def get_isPersonalHome(self, obj: Workspace) -> bool:
-        """Kennzeichnet den eigenen Start-Workspace des angemeldeten Nutzers."""
+        """Kennzeichnet ausschließlich den technischen Heimatkontext des privaten Boards."""
         request = self.context.get("request")
-        return bool(request and obj.owner_id == request.user.id)
+        if not request:
+            return False
+        return Board.objects.filter(
+            workspace=obj,
+            owner=request.user,
+            kind=BoardKind.PERSONAL,
+        ).exists()
 
     def get_currentRole(self, obj: Workspace) -> str | None:
         """Liefert die Rolle des anfragenden Nutzers."""
@@ -819,6 +843,19 @@ class WorkspaceSerializer(serializers.ModelSerializer[Workspace]):
             return None
         membership = obj.memberships.filter(user=request.user, is_active=True).first()
         return membership.role if membership else None
+
+
+
+
+class WorkspaceWriteSerializer(serializers.ModelSerializer[Workspace]):
+    """Validiert Teamname, Einladungsregel und optimistische Version."""
+
+    allowInvites = serializers.BooleanField(source="allow_invites", required=False)
+
+    class Meta:
+        model = Workspace
+        fields = ("name", "allowInvites", "version")
+        extra_kwargs = {"version": {"required": False}}
 
 
 class AutomationRuleSerializer(serializers.ModelSerializer[AutomationRule]):
@@ -962,6 +999,23 @@ class MoveTaskSerializer(serializers.Serializer[dict[str, Any]]):
     )
     targetPosition = serializers.IntegerField(source="target_position", min_value=0)
     version = serializers.IntegerField(min_value=1)
+
+
+class ColumnDeleteWithMoveSerializer(serializers.Serializer[dict[str, Any]]):
+    """Validiert das atomare Verschieben von Tasks vor dem Löschen einer Spalte."""
+
+    targetColumnId = serializers.PrimaryKeyRelatedField(
+        source="target_column", queryset=BoardColumn.objects.all()
+    )
+    version = serializers.IntegerField(min_value=1)
+
+
+class PoolClaimSerializer(serializers.Serializer[dict[str, Any]]):
+    """Validiert die Übernahme einer Poolaufgabe in ein persönliches Board."""
+
+    assigneeId = serializers.PrimaryKeyRelatedField(
+        source="assignee", queryset=User.objects.all(), required=False
+    )
 
 
 class InvitationCreateSerializer(serializers.Serializer[dict[str, Any]]):

@@ -392,15 +392,23 @@ def award_carly_reward(
         available_xp=DAILY_XP_HARD_CAP - xp_today - base_awarded_xp,
     )
     awarded_xp = base_awarded_xp + sum(int(item["xp"]) for item in xp_bonuses)
-    reward_metadata = {**(metadata or {})}
-    if xp_bonuses:
-        reward_metadata["xpBonuses"] = xp_bonuses
     awarded_credits = _cap_reward(
         base_credits,
         multiplier,
         credit_daily_multiplier,
         DAILY_CREDIT_HARD_CAP - credits_today,
     )
+    reward_metadata = {**(metadata or {})}
+    if xp_bonuses:
+        reward_metadata["xpBonuses"] = xp_bonuses
+    daily_limit_kinds: list[str] = []
+    if base_xp > 0 and xp_today + awarded_xp >= DAILY_XP_HARD_CAP:
+        daily_limit_kinds.append("xp")
+    if base_credits > 0 and credits_today + awarded_credits >= DAILY_CREDIT_HARD_CAP:
+        daily_limit_kinds.append("credits")
+    if daily_limit_kinds:
+        reward_metadata["dailyLimitReached"] = True
+        reward_metadata["dailyLimitKinds"] = daily_limit_kinds
 
     try:
         with transaction.atomic():

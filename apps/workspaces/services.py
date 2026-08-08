@@ -725,13 +725,23 @@ def create_task(
         users=[validated_data.get("assignee"), *collaborators],
     )
     if board.kind == BoardKind.PERSONAL:
-        validated_data["assignee"] = board.owner
-        validated_data["column"] = _ensure_personal_intake_column(
-            board=board, user=board.owner
-        )
+        requested_assignee = validated_data.get("assignee")
+        if requested_assignee is not None and requested_assignee.id != board.owner_id:
+            board = ensure_personal_board(user=requested_assignee)
+            validated_data["assignee"] = requested_assignee
+            validated_data["column"] = _ensure_personal_intake_column(
+                board=board, user=requested_assignee
+            )
+        else:
+            validated_data["assignee"] = board.owner
+            validated_data["column"] = _ensure_personal_intake_column(
+                board=board, user=board.owner
+            )
+    elif validated_data.get("is_shared_pool"):
+        validated_data["column"] = None
     elif validated_data.get("column") is None:
         validated_data["column"] = board.columns.order_by("position").first()
-    column = validated_data["column"]
+    column = validated_data.get("column")
     position = _next_position(Task, column=column, archived_at__isnull=True)
     task = Task.objects.create(
         workspace=board.workspace,
@@ -785,7 +795,10 @@ def update_task(
         meaningful_change = True
     for field, value in validated_data.items():
         setattr(locked, field, value)
-    if target_column is not None and target_column.id != locked.column_id:
+    if locked.is_shared_pool:
+        locked.column = None
+        locked.position = _next_position(Task, column=None, archived_at__isnull=True)
+    elif target_column is not None and target_column.id != locked.column_id:
         locked.column = target_column
         locked.position = _next_position(Task, column=target_column, archived_at__isnull=True)
     increment_version(locked)
@@ -815,6 +828,75 @@ def update_task(
             source_type="task",
             source_id=str(locked.id),
         )
+    return locked
+
+
+@transaction.atomic
+def claim_pool_task(*, task: Task, actor: User, assignee: User) -> Task:
+    """Übernimmt eine Poolaufgabe atomar in das persönliche Board des Empfängers."""
+    locked = (
+        Task.objects.select_for_update()
+        .select_related("board", "project", "workspace")
+        .get(pk=task.pk)
+    )
+    if not locked.is_shared_pool:
+        raise ConflictError("Diese Aufgabe befindet sich nicht mehr im Pool.")
+
+    membership = WorkspaceMembership.objects.filter(
+        workspace=locked.workspace, user=assignee, is_active=True
+    ).first()
+    if membership is None:
+        raise ValidationError({"assigneeId": "Die Person gehört nicht zum zugehörigen Team."})
+
+    source_board_id = locked.board_id
+    source_task_id = str(locked.id)
+    personal_board = ensure_personal_board(user=assignee)
+    intake_column = _ensure_personal_intake_column(board=personal_board, user=assignee)
+
+    locked.workspace = personal_board.workspace
+    locked.board = personal_board
+    locked.project = None
+    locked.column = intake_column
+    locked.assignee = assignee
+    locked.is_shared_pool = False
+    locked.requires_review = False
+    locked.review_hint = ""
+    locked.position = _next_position(Task, column=intake_column, archived_at__isnull=True)
+    increment_version(locked)
+    locked.save(
+        update_fields=(
+            "workspace",
+            "board",
+            "project",
+            "column",
+            "assignee",
+            "is_shared_pool",
+            "requires_review",
+            "review_hint",
+            "position",
+            "version",
+            "updated_at",
+        )
+    )
+    locked.collaborators.clear()
+    locked.subtasks.exclude(assignee=assignee).update(assignee=None)
+    _sync_assignment_mirror(locked)
+    add_history(
+        task=locked,
+        actor=actor,
+        action=f"Poolaufgabe von {assignee.display_name} übernommen",
+        icon="assignment_ind",
+    )
+    _broadcast_board(source_board_id, "task.deleted", {"taskId": source_task_id})
+    _broadcast_board(
+        personal_board.id,
+        "task.created",
+        {
+            "taskId": str(locked.id),
+            "columnId": str(intake_column.id),
+            "version": locked.version,
+        },
+    )
     return locked
 
 
@@ -1266,8 +1348,8 @@ def create_invitation(
     full_name: str = "",
 ) -> tuple[WorkspaceInvitation, str]:
     """Erzeugt eine Einladung und informiert bestehende Konten zusätzlich in-app."""
-    if not workspace.allow_invites:
-        raise ConflictError("Einladungen sind für diesen Workspace deaktiviert.")
+    if project is None and not workspace.allow_invites and actor.id != workspace.owner_id:
+        raise ConflictError("Weitere Team-Einladungen sind für Manager deaktiviert.")
     normalized_email = email.strip().lower()
     now = timezone.now()
     existing_user = User.objects.filter(email__iexact=normalized_email, is_active=True).first()

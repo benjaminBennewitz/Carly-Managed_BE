@@ -1,9 +1,0 @@
-docs/
-├── API_UEBERSICHT.md
-├── ARCHITEKTUR.md
-├── FRONTEND_INTEGRATION.md
-├── make-tree.ps1
-├── openapi.yml
-├── QUALITAETSBERICHT.md
-├── SECURITY.md
-└── tree.txt

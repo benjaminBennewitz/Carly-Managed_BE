@@ -310,10 +310,71 @@ def _seed_preferences(owner: User) -> None:
     owner.carly_actions.all().delete()
 
 
+def _prepare_personal_demo_board(*, owner: User, demo_workspace: Workspace) -> Board:
+    """Bereitet das globale persönliche Board für reproduzierbare Demo-Aufgaben vor."""
+    from apps.workspaces.services import ensure_personal_board
+
+    personal_board = ensure_personal_board(user=owner)
+    if personal_board.workspace_id == demo_workspace.id:
+        home_workspace = (
+            Workspace.objects.filter(owner=owner)
+            .exclude(pk=demo_workspace.pk)
+            .order_by("created_at")
+            .first()
+        )
+        if home_workspace is None:
+            home_workspace = Workspace.objects.create(
+                name=f"{owner.display_name}s Workspace",
+                owner=owner,
+            )
+            WorkspaceMembership.objects.create(
+                workspace=home_workspace,
+                user=owner,
+                role=WorkspaceRole.OWNER,
+                avatar_color="#6558d3",
+            )
+        personal_board.workspace = home_workspace
+        personal_board.save(update_fields=("workspace", "updated_at"))
+        Task.objects.filter(board=personal_board).update(workspace=home_workspace)
+
+    Task.objects.filter(
+        id__in=[
+            _stable_id(owner, "task::personal-board-review"),
+            _stable_id(owner, "task::personal-backend"),
+        ]
+    ).delete()
+    return personal_board
+
+
+def _personal_demo_columns(board: Board) -> dict[str, BoardColumn]:
+    """Liefert passende Spalten des globalen persönlichen Boards für Demo-Aufgaben."""
+    from apps.workspaces.services import ensure_personal_board
+
+    ensure_personal_board(user=board.owner)
+    columns = list(board.columns.order_by("position", "created_at"))
+    by_title = {column.title.casefold(): column for column in columns}
+    intake = next(
+        (column for column in columns if column.system_role == ColumnSystemRole.NEW_ASSIGNED),
+        None,
+    )
+    open_column = by_title.get("offen") or intake or columns[0]
+    doing_column = by_title.get("in arbeit") or open_column
+    done_column = by_title.get("erledigt") or columns[-1]
+    return {
+        "new": intake or open_column,
+        "open": open_column,
+        "doing": doing_column,
+        "done": done_column,
+    }
+
+
 @transaction.atomic
 def reset_demo_workspace(*, owner: User) -> DemoResetResult:
     """Löscht nur den Demo-Workspace des Owners und erzeugt ihn atomar neu."""
+    from apps.workspaces.services import ensure_personal_board
+
     workspace_name = settings.DEMO_WORKSPACE_NAME
+    ensure_personal_board(user=owner)
     Workspace.objects.filter(owner=owner, name=workspace_name).delete()
     SystemNotification.objects.filter(
         recipient=owner, workspace__isnull=True, title__startswith="Demo:"
@@ -413,32 +474,8 @@ def reset_demo_workspace(*, owner: User) -> DemoResetResult:
         status=ProjectStatus.ARCHIVED,
     )
 
-    personal_board = Board.objects.create(
-        id=_stable_id(owner, "board::personal"),
-        workspace=workspace,
-        kind=BoardKind.PERSONAL,
-        owner=owner,
-        title="Mein Board",
-    )
-    personal_columns: dict[str, BoardColumn] = {}
-    for position, (key, title, color, system_role, is_dynamic) in enumerate(
-        [
-            ("today", "Heute", "#7752B3", "", False),
-            ("next", "Als Nächstes", "#4E82A8", "", False),
-            ("new", "Neu zugewiesen", "#D5A646", ColumnSystemRole.NEW_ASSIGNED, True),
-            ("done", "Erledigt", "#4F9572", "", False),
-        ]
-    ):
-        personal_columns[key] = BoardColumn.objects.create(
-            id=_stable_id(owner, f"column::personal::{key}"),
-            board=personal_board,
-            title=title,
-            color=color,
-            position=position,
-            system_role=system_role,
-            is_dynamic=is_dynamic,
-            is_fixed_position=bool(system_role),
-        )
+    personal_board = _prepare_personal_demo_board(owner=owner, demo_workspace=workspace)
+    personal_columns = _personal_demo_columns(personal_board)
 
     _create_task(
         owner=owner,
@@ -595,10 +632,10 @@ def reset_demo_workspace(*, owner: User) -> DemoResetResult:
     )
     _create_task(
         owner=owner,
-        workspace=workspace,
+        workspace=personal_board.workspace,
         board=personal_board,
         project=None,
-        column=personal_columns["today"],
+        column=personal_columns["doing"],
         key="personal-board-review",
         title="Board-Ansicht prüfen",
         description="Responsive Spaltenbreiten, Fokuszustände und Drawer-Verhalten kontrollieren.",
@@ -608,10 +645,10 @@ def reset_demo_workspace(*, owner: User) -> DemoResetResult:
     )
     _create_task(
         owner=owner,
-        workspace=workspace,
+        workspace=personal_board.workspace,
         board=personal_board,
         project=None,
-        column=personal_columns["next"],
+        column=personal_columns["open"],
         key="personal-backend",
         title="Backend-Integration dokumentieren",
         description="Startreihenfolge, API-Verträge und Reset-Prozess nachvollziehbar festhalten.",
