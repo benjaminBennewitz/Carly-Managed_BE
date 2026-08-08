@@ -22,7 +22,7 @@ from apps.common.exceptions import ConflictError
 from apps.common.throttles import SearchRateThrottle, UploadRateThrottle
 from apps.common.validators import validate_upload
 from apps.preferences.rewards import award_carly_reward_safely
-from apps.workspaces.choices import InvitationStatus, ProjectStatus, WorkspaceRole
+from apps.workspaces.choices import BoardKind, InvitationStatus, ProjectStatus, WorkspaceRole
 from apps.workspaces.models import (
     AutomationRule,
     Board,
@@ -83,6 +83,7 @@ from apps.workspaces.services import (
     assert_version,
     create_invitation,
     create_project,
+    ensure_personal_board_for_workspace,
     create_subtask,
     create_task,
     increment_version,
@@ -205,18 +206,20 @@ class ProjectViewSet(viewsets.ModelViewSet[Project]):
         )
 
     def create(self, request: Any, *args: Any, **kwargs: Any) -> Response:
-        """Erstellt ein Projekt nur mit Workspace-Verwaltungsrechten."""
+        """Erstellt ein eigenes Projekt für jedes aktive Workspace-Mitglied."""
         workspace_id = request.data.get("workspaceId")
         workspace = workspaces_for_user(request.user).filter(pk=workspace_id).first()
         if workspace is None:
             raise NotFound("Workspace nicht gefunden.")
-        require_workspace_manager(user=request.user, workspace=workspace)
+        get_membership(user=request.user, workspace=workspace)
         serializer = ProjectWriteSerializer(
             data=request.data, context={**_serializer_context(self), "workspace": workspace}
         )
         serializer.is_valid(raise_exception=True)
+        validated_data = dict(serializer.validated_data)
+        validated_data["owner"] = request.user
         project = create_project(
-            workspace=workspace, actor=request.user, validated_data=dict(serializer.validated_data)
+            workspace=workspace, actor=request.user, validated_data=validated_data
         )
         return Response(
             ProjectSerializer(project, context=_serializer_context(self)).data,
@@ -311,8 +314,12 @@ class BoardViewSet(viewsets.ReadOnlyModelViewSet[Board]):
     pagination_class = None
 
     def get_queryset(self):
-        """Optimiert den Snapshot durch gezieltes Prefetching."""
-        return boards_for_user(self.request.user).prefetch_related(
+        """Optimiert und begrenzt den Snapshot auf den angefragten Workspace."""
+        queryset = boards_for_user(self.request.user)
+        workspace_id = self.request.query_params.get("workspaceId")
+        if workspace_id:
+            queryset = queryset.filter(workspace_id=workspace_id)
+        return queryset.prefetch_related(
             "columns__tasks__collaborators",
             "columns__tasks__subtasks__assignee",
             "columns__tasks__comments__author",
@@ -463,8 +470,11 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
     def get_queryset(self):
         """Filtert Tasks nach Board, Projekt, Pool, Archiv und Zuweisung."""
         queryset = tasks_for_user(self.request.user)
+        workspace_id = self.request.query_params.get("workspaceId")
         board_id = self.request.query_params.get("boardId")
         project_id = self.request.query_params.get("projectId")
+        if workspace_id:
+            queryset = queryset.filter(workspace_id=workspace_id)
         if board_id:
             queryset = queryset.filter(board_id=board_id)
         if project_id:
@@ -541,7 +551,17 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
             assert_version(locked, serializer.validated_data["version"])
             board_id = locked.board_id
             task_id = str(locked.id)
+            assignment_mirrors = list(
+                locked.mirrored_tasks.filter(source_subtask__isnull=True).values_list(
+                    "id", "board_id"
+                )
+            )
+            locked.mirrored_tasks.filter(source_subtask__isnull=True).delete()
             locked.delete()
+            for mirror_id, mirror_board_id in assignment_mirrors:
+                _broadcast_board(
+                    mirror_board_id, "task.deleted", {"taskId": str(mirror_id)}
+                )
             _broadcast_board(board_id, "task.deleted", {"taskId": task_id})
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -626,6 +646,14 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
             if "title" not in serializer.validated_data:
                 raise ValidationError({"title": "Ein Titel ist erforderlich."})
             assignee = serializer.validated_data.get("assignee")
+            if task.board.kind == BoardKind.PERSONAL and assignee and assignee != task.board.owner:
+                raise ValidationError(
+                    {
+                        "assigneeId": (
+                            "Persönliche Unteraufgaben können nur dir selbst zugewiesen werden."
+                        )
+                    }
+                )
             if (
                 assignee
                 and not WorkspaceMembership.objects.filter(
@@ -666,6 +694,15 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
         serializer = SubtaskWriteSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         assignee_value: User | None | object = serializer.validated_data.get("assignee", ...)
+        if (
+            task.board.kind == BoardKind.PERSONAL
+            and assignee_value is not ...
+            and assignee_value
+            and assignee_value != task.board.owner
+        ):
+            raise ValidationError(
+                {"assigneeId": "Persönliche Unteraufgaben können nur dir selbst zugewiesen werden."}
+            )
         if (
             assignee_value is not ...
             and assignee_value
@@ -1042,6 +1079,9 @@ class JoinRequestViewSet(viewsets.ReadOnlyModelViewSet[WorkspaceJoinRequest]):
                     "is_active": True,
                     "avatar_color": join_request.avatar_color,
                 },
+            )
+            ensure_personal_board_for_workspace(
+                user=join_request.user, workspace=join_request.workspace
             )
         return Response(JoinRequestSerializer(join_request, context=_serializer_context(self)).data)
 

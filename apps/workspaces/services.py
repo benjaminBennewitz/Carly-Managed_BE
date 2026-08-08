@@ -20,6 +20,7 @@ from apps.preferences.rewards import award_carly_reward_safely, reward_task_comp
 from apps.workspaces.choices import (
     AutomationTrigger,
     BoardKind,
+    ColumnSystemRole,
     InvitationStatus,
     ProjectRole,
     ProjectStatus,
@@ -80,11 +81,81 @@ def increment_version(instance: Any) -> None:
     instance.version += 1
 
 
+def _dynamic_new_columns_enabled(user: User) -> bool:
+    """Liefert die persönliche Einstellung für die dynamische Neu-Spalte."""
+    from apps.preferences.models import UserSettings
+
+    value = (
+        UserSettings.objects.filter(user=user)
+        .values_list("dynamic_new_columns", flat=True)
+        .first()
+    )
+    return True if value is None else bool(value)
+
+
+def _ensure_personal_intake_column(*, board: Board, user: User) -> BoardColumn:
+    """Stellt die persönliche Eingangsspalte bereit und liefert ein gültiges Task-Ziel."""
+    intake = board.columns.filter(system_role=ColumnSystemRole.NEW_ASSIGNED).first()
+    if _dynamic_new_columns_enabled(user):
+        if intake is None:
+            existing_columns = list(board.columns.order_by("-position"))
+            for column in existing_columns:
+                column.position += 1
+                column.save(update_fields=("position", "updated_at"))
+            intake = BoardColumn.objects.create(
+                board=board,
+                title="Neu",
+                color="#D5A646",
+                position=0,
+                is_fixed_position=True,
+                is_dynamic=True,
+                system_role=ColumnSystemRole.NEW_ASSIGNED,
+            )
+        return intake
+
+    fallback = (
+        board.columns.exclude(system_role=ColumnSystemRole.NEW_ASSIGNED)
+        .order_by("position")
+        .first()
+    )
+    if fallback is None and intake is not None:
+        return intake
+    if fallback is None:
+        fallback = BoardColumn.objects.create(
+            board=board,
+            title=DEFAULT_COLUMNS[0][0],
+            color=DEFAULT_COLUMNS[0][1],
+            position=0,
+        )
+    return fallback
+
+
+def ensure_personal_board_for_workspace(*, user: User, workspace: Workspace) -> Board:
+    """Stellt pro Nutzer und Workspace genau ein persönliches Board bereit."""
+    board, created = Board.objects.get_or_create(
+        workspace=workspace,
+        owner=user,
+        kind=BoardKind.PERSONAL,
+        defaults={"title": "Mein Board"},
+    )
+    if created:
+        offset = 1 if _dynamic_new_columns_enabled(user) else 0
+        BoardColumn.objects.bulk_create(
+            [
+                BoardColumn(board=board, title=title, color=color, position=position + offset)
+                for position, (title, color) in enumerate(DEFAULT_COLUMNS)
+            ]
+        )
+    _ensure_personal_intake_column(board=board, user=user)
+    return board
+
+
 @transaction.atomic
 def bootstrap_personal_workspace(user: User) -> Workspace:
     """Erstellt genau einen persönlichen Start-Workspace samt Board."""
     existing = Workspace.objects.filter(owner=user).first()
     if existing:
+        ensure_personal_board_for_workspace(user=user, workspace=existing)
         return existing
     workspace = Workspace.objects.create(name=f"{user.display_name}s Workspace", owner=user)
     WorkspaceMembership.objects.create(
@@ -93,18 +164,7 @@ def bootstrap_personal_workspace(user: User) -> Workspace:
         role=WorkspaceRole.OWNER,
         avatar_color="#6558d3",
     )
-    board = Board.objects.create(
-        workspace=workspace,
-        owner=user,
-        kind=BoardKind.PERSONAL,
-        title="Mein Board",
-    )
-    BoardColumn.objects.bulk_create(
-        [
-            BoardColumn(board=board, title=title, color=color, position=position)
-            for position, (title, color) in enumerate(DEFAULT_COLUMNS)
-        ]
-    )
+    ensure_personal_board_for_workspace(user=user, workspace=workspace)
     from apps.preferences.services import bootstrap_preferences
 
     bootstrap_preferences(user=user, workspace=workspace)
@@ -365,6 +425,112 @@ def set_project_status(
     return locked
 
 
+def _assignment_mirrors(task: Task):
+    """Liefert persönliche Spiegelungen einer vollständig zugewiesenen Projektaufgabe."""
+    return Task.objects.filter(
+        source_task=task,
+        source_subtask__isnull=True,
+        board__kind=BoardKind.PERSONAL,
+    )
+
+
+def _sync_assignment_mirror(task: Task) -> None:
+    """Synchronisiert eine Projektzuweisung mit dem persönlichen Eingang des Empfängers."""
+    mirrors = _assignment_mirrors(task)
+    if task.board.kind != BoardKind.PROJECT or task.source_task_id or task.source_subtask_id:
+        mirrors.delete()
+        return
+
+    assignee = task.assignee
+    if assignee is None:
+        for mirror in mirrors:
+            board_id = mirror.board_id
+            mirror_id = str(mirror.id)
+            mirror.delete()
+            _broadcast_board(board_id, "task.deleted", {"taskId": mirror_id})
+        return
+
+    personal_board = ensure_personal_board_for_workspace(user=assignee, workspace=task.workspace)
+    intake_column = _ensure_personal_intake_column(board=personal_board, user=assignee)
+    mirror = mirrors.filter(board=personal_board).first()
+
+    for obsolete in mirrors.exclude(board=personal_board):
+        board_id = obsolete.board_id
+        mirror_id = str(obsolete.id)
+        obsolete.delete()
+        _broadcast_board(board_id, "task.deleted", {"taskId": mirror_id})
+
+    if mirror is None:
+        mirror = Task.objects.create(
+            workspace=task.workspace,
+            board=personal_board,
+            column=intake_column,
+            project=task.project,
+            source_task=task,
+            owner=task.owner,
+            assignee=assignee,
+            title=task.title,
+            description=task.description,
+            priority=task.priority,
+            start_date=task.start_date,
+            due_date=task.due_date,
+            due_time=task.due_time,
+            tags=list(task.tags),
+            position=_next_position(Task, column=intake_column, archived_at__isnull=True),
+            is_done=task.is_done,
+            completed_at=task.completed_at,
+            requires_review=False,
+            review_hint="Zuweisung aus einem geteilten Projekt.",
+        )
+        _broadcast_board(
+            personal_board.id,
+            "task.created",
+            {
+                "taskId": str(mirror.id),
+                "columnId": str(intake_column.id),
+                "version": mirror.version,
+            },
+        )
+        return
+
+    mirror.project = task.project
+    mirror.owner = task.owner
+    mirror.assignee = assignee
+    mirror.title = task.title
+    mirror.description = task.description
+    mirror.priority = task.priority
+    mirror.start_date = task.start_date
+    mirror.due_date = task.due_date
+    mirror.due_time = task.due_time
+    mirror.tags = list(task.tags)
+    mirror.is_done = task.is_done
+    mirror.completed_at = task.completed_at
+    mirror.archived_at = task.archived_at
+    increment_version(mirror)
+    mirror.save(
+        update_fields=(
+            "project",
+            "owner",
+            "assignee",
+            "title",
+            "description",
+            "priority",
+            "start_date",
+            "due_date",
+            "due_time",
+            "tags",
+            "is_done",
+            "completed_at",
+            "archived_at",
+            "version",
+            "updated_at",
+        )
+    )
+    _broadcast_board(
+        personal_board.id, "task.updated", {"taskId": str(mirror.id), "version": mirror.version}
+    )
+
+
 @transaction.atomic
 def create_task(
     *,
@@ -374,10 +540,14 @@ def create_task(
 ) -> Task:
     """Erstellt einen Task, ordnet ihn ein und führt passende Regeln aus."""
     collaborators = validated_data.pop("collaborators", [])
-    column = validated_data.get("column")
-    if column is None:
-        column = board.columns.order_by("position").first()
-        validated_data["column"] = column
+    if board.kind == BoardKind.PERSONAL:
+        validated_data["assignee"] = board.owner
+        validated_data["column"] = _ensure_personal_intake_column(
+            board=board, user=board.owner
+        )
+    elif validated_data.get("column") is None:
+        validated_data["column"] = board.columns.order_by("position").first()
+    column = validated_data["column"]
     position = _next_position(Task, column=column, archived_at__isnull=True)
     task = Task.objects.create(
         workspace=board.workspace,
@@ -388,6 +558,7 @@ def create_task(
         **validated_data,
     )
     task.collaborators.set(collaborators)
+    _sync_assignment_mirror(task)
     add_history(task=task, actor=actor, action="Task erstellt", icon="add_task")
     execute_automation_rules(task=task, trigger=AutomationTrigger.TASK_CREATED, actor=actor)
     _broadcast_board(
@@ -438,6 +609,7 @@ def update_task(
     locked.save()
     if collaborators is not None:
         locked.collaborators.set(collaborators)
+    _sync_assignment_mirror(locked)
     add_history(task=locked, actor=actor, action="Task aktualisiert", icon="edit_note")
     if old_assignee_id != locked.assignee_id:
         execute_automation_rules(task=locked, trigger=AutomationTrigger.TASK_ASSIGNED, actor=actor)
@@ -535,6 +707,24 @@ def set_task_completed(*, task: Task, actor: User, completed: bool, supplied_ver
     locked.completed_at = timezone.now() if completed else None
     increment_version(locked)
     locked.save(update_fields=("is_done", "completed_at", "version", "updated_at"))
+    reward_task = locked
+    if locked.source_task_id and locked.source_subtask_id is None:
+        source = Task.objects.select_for_update().filter(pk=locked.source_task_id).first()
+        if source is not None:
+            source.is_done = completed
+            source.completed_at = locked.completed_at
+            increment_version(source)
+            source.save(update_fields=("is_done", "completed_at", "version", "updated_at"))
+            _sync_assignment_mirror(source)
+            _broadcast_board(
+                source.board_id,
+                "task.completed" if completed else "task.reopened",
+                {"taskId": str(source.id), "version": source.version},
+            )
+            reward_task = source
+            locked.refresh_from_db()
+    else:
+        _sync_assignment_mirror(locked)
     action = "Task abgeschlossen" if completed else "Task wieder geöffnet"
     add_history(
         task=locked, actor=actor, action=action, icon="task_alt" if completed else "refresh"
@@ -560,7 +750,7 @@ def set_task_completed(*, task: Task, actor: User, completed: bool, supplied_ver
                 source_id=str(locked.source_subtask_id),
             )
         else:
-            reward_task_completion_safely(user=actor, task=locked)
+            reward_task_completion_safely(user=actor, task=reward_task)
     return locked
 
 
@@ -572,6 +762,7 @@ def archive_task(*, task: Task, actor: User, supplied_version: int, archived: bo
     locked.archived_at = timezone.now() if archived else None
     increment_version(locked)
     locked.save(update_fields=("archived_at", "version", "updated_at"))
+    _sync_assignment_mirror(locked)
     add_history(
         task=locked,
         actor=actor,
@@ -593,6 +784,92 @@ def add_history(
     return TaskHistoryEntry.objects.create(
         task=task, actor=actor, action=action, icon=icon, metadata=metadata or {}
     )
+
+
+def _sync_subtask_mirror(subtask: Subtask) -> None:
+    """Synchronisiert eine zugewiesene Projekt-Unteraufgabe mit dem persönlichen Eingang."""
+    task = subtask.task
+    mirror = Task.objects.filter(source_subtask=subtask).first()
+    assignee = subtask.assignee
+
+    if task.board.kind != BoardKind.PROJECT or assignee is None:
+        if mirror is not None:
+            board_id = mirror.board_id
+            mirror_id = str(mirror.id)
+            mirror.delete()
+            _broadcast_board(board_id, "task.deleted", {"taskId": mirror_id})
+        return
+
+    personal_board = ensure_personal_board_for_workspace(user=assignee, workspace=task.workspace)
+    intake_column = _ensure_personal_intake_column(board=personal_board, user=assignee)
+
+    if mirror is None:
+        mirror = Task.objects.create(
+            workspace=task.workspace,
+            board=personal_board,
+            column=intake_column,
+            project=task.project,
+            parent_task=task,
+            source_task=task,
+            source_subtask=subtask,
+            owner=task.owner,
+            assignee=assignee,
+            title=subtask.title,
+            description=f"Unteraufgabe aus „{task.title}“",
+            priority=task.priority,
+            due_date=task.due_date,
+            position=_next_position(Task, column=intake_column, archived_at__isnull=True),
+            is_done=subtask.is_done,
+            completed_at=timezone.now() if subtask.is_done else None,
+        )
+        _broadcast_board(
+            personal_board.id,
+            "task.created",
+            {
+                "taskId": str(mirror.id),
+                "columnId": str(intake_column.id),
+                "version": mirror.version,
+            },
+        )
+        return
+
+    old_board_id = mirror.board_id
+    board_changed = mirror.board_id != personal_board.id
+    mirror.workspace = task.workspace
+    mirror.board = personal_board
+    if board_changed:
+        mirror.column = intake_column
+        mirror.position = _next_position(Task, column=intake_column, archived_at__isnull=True)
+    mirror.project = task.project
+    mirror.parent_task = task
+    mirror.source_task = task
+    mirror.owner = task.owner
+    mirror.assignee = assignee
+    mirror.title = subtask.title
+    mirror.description = f"Unteraufgabe aus „{task.title}“"
+    mirror.priority = task.priority
+    mirror.due_date = task.due_date
+    mirror.is_done = subtask.is_done
+    mirror.completed_at = timezone.now() if subtask.is_done else None
+    increment_version(mirror)
+    mirror.save()
+    if board_changed:
+        _broadcast_board(old_board_id, "task.deleted", {"taskId": str(mirror.id)})
+        _broadcast_board(
+            personal_board.id,
+            "task.created",
+            {
+                "taskId": str(mirror.id),
+                "columnId": str(mirror.column_id),
+                "version": mirror.version,
+            },
+        )
+    else:
+        _broadcast_board(
+            personal_board.id,
+            "task.updated",
+            {"taskId": str(mirror.id), "version": mirror.version},
+        )
 
 
 @transaction.atomic
@@ -618,42 +895,7 @@ def create_subtask(
     add_history(
         task=task, actor=actor, action=f"Unteraufgabe „{title}“ erstellt", icon="playlist_add"
     )
-    if assignee and assignee.id != actor.id:
-        personal_board = Board.objects.filter(
-            workspace=task.workspace, owner=assignee, kind=BoardKind.PERSONAL
-        ).first()
-        if personal_board is None:
-            personal_board = Board.objects.create(
-                workspace=task.workspace,
-                owner=assignee,
-                kind=BoardKind.PERSONAL,
-                title="Mein Board",
-            )
-            BoardColumn.objects.bulk_create(
-                [
-                    BoardColumn(
-                        board=personal_board, title=column_title, color=color, position=index
-                    )
-                    for index, (column_title, color) in enumerate(DEFAULT_COLUMNS)
-                ]
-            )
-        personal_column = personal_board.columns.order_by("position").first()
-        Task.objects.create(
-            workspace=task.workspace,
-            board=personal_board,
-            column=personal_column,
-            project=task.project,
-            parent_task=task,
-            source_task=task,
-            source_subtask=subtask,
-            owner=actor,
-            assignee=assignee,
-            title=title,
-            description=f"Unteraufgabe aus „{task.title}“",
-            priority=task.priority,
-            due_date=task.due_date,
-            position=_next_position(Task, column=personal_column, archived_at__isnull=True),
-        )
+    _sync_subtask_mirror(subtask)
     _broadcast_board(
         task.board_id, "subtask.created", {"taskId": str(task.id), "subtaskId": str(subtask.id)}
     )
@@ -683,19 +925,7 @@ def update_subtask(
     increment_version(locked)
     locked.full_clean()
     locked.save()
-    if hasattr(locked, "mirror_task"):
-        mirror = locked.mirror_task
-        mirror.title = locked.title
-        mirror.assignee = locked.assignee
-        mirror.is_done = locked.is_done
-        mirror.completed_at = timezone.now() if locked.is_done else None
-        increment_version(mirror)
-        mirror.save(
-            update_fields=("title", "assignee", "is_done", "completed_at", "version", "updated_at")
-        )
-        _broadcast_board(
-            mirror.board_id, "task.updated", {"taskId": str(mirror.id), "version": mirror.version}
-        )
+    _sync_subtask_mirror(locked)
     add_history(
         task=locked.task,
         actor=actor,
@@ -843,7 +1073,7 @@ def create_invitation(
     project: Project | None,
     actor: User,
     email: str,
-    full_name: str,
+    full_name: str = "",
 ) -> tuple[WorkspaceInvitation, str]:
     """Erzeugt eine Einladung und informiert bestehende Konten zusätzlich in-app."""
     if not workspace.allow_invites:
@@ -871,17 +1101,17 @@ def create_invitation(
     ).exists():
         raise ConflictError("Für diese E-Mail-Adresse besteht bereits eine offene Einladung.")
 
+    existing_user = User.objects.filter(email__iexact=normalized_email, is_active=True).first()
     raw_token = secrets.token_urlsafe(48)
     invitation = WorkspaceInvitation.objects.create(
         workspace=workspace,
         project=project,
         invited_by=actor,
         email=normalized_email,
-        full_name=full_name.strip(),
+        full_name=existing_user.display_name if existing_user else full_name.strip(),
         token_hash=WorkspaceInvitation.hash_token(raw_token),
         expires_at=WorkspaceInvitation.default_expiry(),
     )
-    existing_user = User.objects.filter(email__iexact=normalized_email, is_active=True).first()
     if existing_user:
         from apps.inbox.services import create_notification
         from apps.realtime.events import broadcast_inbox_event
@@ -950,6 +1180,7 @@ def _complete_invitation_acceptance(
         user=user,
         defaults={"role": WorkspaceRole.MEMBER, "is_active": True},
     )
+    ensure_personal_board_for_workspace(user=user, workspace=invitation.workspace)
     if invitation.project:
         ProjectParticipant.objects.update_or_create(
             project=invitation.project,
@@ -959,7 +1190,10 @@ def _complete_invitation_acceptance(
     invitation.status = InvitationStatus.ACCEPTED
     invitation.accepted_by = user
     invitation.accepted_at = timezone.now()
-    invitation.save(update_fields=("status", "accepted_by", "accepted_at", "updated_at"))
+    invitation.full_name = user.display_name
+    invitation.save(
+        update_fields=("status", "accepted_by", "accepted_at", "full_name", "updated_at")
+    )
 
     from apps.inbox.services import create_notification
     from apps.realtime.events import broadcast_inbox_event

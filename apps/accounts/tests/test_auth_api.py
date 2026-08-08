@@ -123,16 +123,18 @@ def test_registration_rejects_weak_password() -> None:
     assert "password" in response.data["fields"]
 
 
-def test_duplicate_registration_uses_generic_error() -> None:
-    """Gibt keine eindeutige Kontoauskunft über den Registrierungsendpunkt preis."""
+def test_duplicate_registration_returns_clear_email_error() -> None:
+    """Kennzeichnet eine bereits verwendete E-Mail-Adresse verständlich am Feld."""
     client, token = csrf_client()
     assert register(client, token).status_code == 201
     client.logout()
     client.get(reverse("csrf"))
     duplicate = register(client, client.cookies["cm_csrftoken"].value)
     assert duplicate.status_code == 400
-    assert duplicate.data["fields"]["email"][0]["code"] == "registration_failed"
-    assert "besteht bereits" not in duplicate.data["fields"]["email"][0]["message"]
+    assert duplicate.data["fields"]["email"][0]["code"] == "email_in_use"
+    assert duplicate.data["fields"]["email"][0]["message"] == (
+        "Diese E-Mail-Adresse wird bereits verwendet."
+    )
 
 
 def test_login_uses_generic_error_and_locks_repeated_failures() -> None:

@@ -9,6 +9,7 @@ from rest_framework import serializers
 from apps.accounts.models import User
 from apps.common.validators import reject_control_characters
 from apps.workspaces.choices import (
+    BoardKind,
     ProjectRole,
     RecurrenceScheduleType,
     WorkspaceRole,
@@ -293,6 +294,7 @@ class TaskSerializer(MemberLookupMixin, serializers.ModelSerializer[Task]):
         source="parent_task.title", allow_null=True, read_only=True
     )
     isSubtaskMirror = serializers.SerializerMethodField()
+    isAssignmentMirror = serializers.SerializerMethodField()
     sourceTaskId = serializers.UUIDField(source="source_task_id", allow_null=True, read_only=True)
     sourceSubtaskId = serializers.UUIDField(
         source="source_subtask_id", allow_null=True, read_only=True
@@ -335,6 +337,7 @@ class TaskSerializer(MemberLookupMixin, serializers.ModelSerializer[Task]):
             "parentTaskId",
             "parentTaskTitle",
             "isSubtaskMirror",
+            "isAssignmentMirror",
             "sourceTaskId",
             "sourceSubtaskId",
             "owner",
@@ -374,6 +377,10 @@ class TaskSerializer(MemberLookupMixin, serializers.ModelSerializer[Task]):
     def get_isSubtaskMirror(self, obj: Task) -> bool:
         """Erkennt persönliche Spiegelaufgaben einer Unteraufgabe."""
         return obj.source_subtask_id is not None
+
+    def get_isAssignmentMirror(self, obj: Task) -> bool:
+        """Erkennt persönliche Spiegelungen vollständig zugewiesener Projektaufgaben."""
+        return obj.source_task_id is not None and obj.source_subtask_id is None
 
     def get_owner(self, obj: Task) -> dict[str, Any] | None:
         """Liefert den Task-Owner."""
@@ -446,7 +453,9 @@ class TaskWriteSerializer(serializers.ModelSerializer[Task]):
     dueTime = serializers.TimeField(source="due_time", allow_null=True, required=False)
     isSharedPool = serializers.BooleanField(source="is_shared_pool", required=False)
     requiresReview = serializers.BooleanField(source="requires_review", required=False)
-    reviewHint = serializers.CharField(source="review_hint", allow_blank=True, required=False)
+    reviewHint = serializers.CharField(
+        source="review_hint", allow_blank=True, allow_null=True, required=False
+    )
     columnId = serializers.PrimaryKeyRelatedField(
         source="column", queryset=BoardColumn.objects.all(), allow_null=True, required=False
     )
@@ -472,6 +481,10 @@ class TaskWriteSerializer(serializers.ModelSerializer[Task]):
         )
         extra_kwargs = {"version": {"required": False}}
 
+    def validate_reviewHint(self, value: str | None) -> str:
+        """Normalisiert leere Review-Hinweise auf den nicht-nullbaren Modellwert."""
+        return value or ""
+
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         """Prüft Board-Zugehörigkeit, Mitgliedschaften und Datumsreihenfolge."""
         task = self.instance
@@ -479,6 +492,14 @@ class TaskWriteSerializer(serializers.ModelSerializer[Task]):
         workspace = board.workspace
         assignee = attrs.get("assignee", getattr(task, "assignee", None))
         collaborators = attrs.get("collaborators")
+        if board.kind == BoardKind.PERSONAL and assignee and assignee.id != board.owner_id:
+            raise serializers.ValidationError(
+                {"assigneeId": "Persönliche Aufgaben können nur dir selbst zugewiesen werden."}
+            )
+        if board.kind == BoardKind.PERSONAL and collaborators:
+            raise serializers.ValidationError(
+                {"collaboratorIds": "Persönliche Aufgaben können nicht geteilt werden."}
+            )
         column = attrs.get("column", getattr(task, "column", None))
         start_date = attrs.get("start_date", getattr(task, "start_date", None))
         due_date = attrs.get("due_date", getattr(task, "due_date", None))

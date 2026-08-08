@@ -101,3 +101,37 @@ def test_conversation_requires_common_workspace_membership() -> None:
         client_for(external).get(reverse("conversation-detail", args=[conversation_id])).status_code
         == 404
     )
+
+
+def test_inbox_lists_can_be_limited_to_active_workspace() -> None:
+    """Trennt Benachrichtigungen und Gespräche bei mehreren Workspaces vollständig."""
+    owner = create_user("owner-scope@example.test", "Owner Scope")
+    member = create_user("member-scope@example.test", "Member Scope")
+    first_workspace = owner.owned_workspaces.get()
+    second_workspace = member.owned_workspaces.get()
+    WorkspaceMembership.objects.create(
+        workspace=first_workspace, user=member, role="member", avatar_color="#6558d3"
+    )
+    SystemNotification.objects.create(
+        recipient=member,
+        workspace=first_workspace,
+        kind="system",
+        title="Team",
+        body="Team",
+        icon="group",
+    )
+    SystemNotification.objects.create(
+        recipient=member,
+        workspace=second_workspace,
+        kind="system",
+        title="Privat",
+        body="Privat",
+        icon="person",
+    )
+
+    response = client_for(member).get(
+        reverse("notification-list"), {"workspaceId": str(first_workspace.id)}
+    )
+    assert response.status_code == 200
+    data = response.data["results"] if isinstance(response.data, dict) else response.data
+    assert [item["title"] for item in data] == ["Team"]

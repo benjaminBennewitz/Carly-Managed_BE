@@ -62,8 +62,8 @@ def register_user(
             {
                 "email": [
                     ErrorDetail(
-                        "Die Registrierung konnte nicht abgeschlossen werden.",
-                        code="registration_failed",
+                        "Diese E-Mail-Adresse wird bereits verwendet.",
+                        code="email_in_use",
                     )
                 ]
             }

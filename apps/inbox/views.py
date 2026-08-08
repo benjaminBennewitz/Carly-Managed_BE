@@ -40,6 +40,9 @@ class NotificationViewSet(
         queryset = SystemNotification.objects.filter(recipient=self.request.user).select_related(
             "actor", "workspace"
         )
+        workspace_id = self.request.query_params.get("workspaceId")
+        if workspace_id:
+            queryset = queryset.filter(workspace_id=workspace_id)
         if self.request.query_params.get("unread") == "true":
             queryset = queryset.filter(read_at__isnull=True)
         return queryset
@@ -75,12 +78,18 @@ class ConversationViewSet(viewsets.ModelViewSet[Conversation]):
     http_method_names = ["get", "post", "delete", "head", "options"]
 
     def get_queryset(self):
-        """Lädt Gespräche mit Nachrichten, Teilnehmenden und Leseständen."""
+        """Lädt Gespräche ausschließlich aus aktiven Workspace-Mitgliedschaften."""
+        queryset = Conversation.objects.filter(
+            participant_links__user=self.request.user,
+            participant_links__left_at__isnull=True,
+            workspace__memberships__user=self.request.user,
+            workspace__memberships__is_active=True,
+        )
+        workspace_id = self.request.query_params.get("workspaceId")
+        if workspace_id:
+            queryset = queryset.filter(workspace_id=workspace_id)
         return (
-            Conversation.objects.filter(
-                participant_links__user=self.request.user, participant_links__left_at__isnull=True
-            )
-            .prefetch_related("participant_links__user", "messages__sender")
+            queryset.prefetch_related("participant_links__user", "messages__sender")
             .distinct()
         )
 

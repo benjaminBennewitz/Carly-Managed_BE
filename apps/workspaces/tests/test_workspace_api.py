@@ -10,7 +10,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import User
-from apps.workspaces.models import Board, Task, WorkspaceMembership
+from apps.workspaces.models import Board, ProjectParticipant, Task, WorkspaceMembership
 from apps.workspaces.services import bootstrap_personal_workspace
 
 pytestmark = pytest.mark.django_db
@@ -89,6 +89,100 @@ def test_task_create_validates_membership_and_relations() -> None:
     assert accepted.status_code == 201
     assert accepted.data["title"] == "Sauber validierter Task"
     assert accepted.data["version"] == 1
+
+
+def test_frontend_task_payload_accepts_empty_review_hint() -> None:
+    """Akzeptiert den vollständigen Create-Vertrag des Frontends für persönliche Tasks."""
+    owner = create_user("owner-frontend-task@example.test", "Owner Task")
+    board = Board.objects.get(owner=owner)
+    intake = board.columns.get(system_role="new-assigned")
+
+    response = auth_client(owner).post(
+        reverse("task-list"),
+        {
+            "boardId": str(board.id),
+            "columnId": str(intake.id),
+            "title": "Frontend Task",
+            "description": "",
+            "assigneeId": str(owner.id),
+            "collaboratorIds": [],
+            "priority": "mittel",
+            "dueDate": str(timezone.localdate() + timedelta(days=7)),
+            "tags": [],
+            "isSharedPool": False,
+            "requiresReview": False,
+            "reviewHint": None,
+        },
+        format="json",
+    )
+
+    assert response.status_code == 201
+    assert response.data["title"] == "Frontend Task"
+    assert response.data["reviewHint"] == ""
+
+
+def test_personal_task_creation_always_uses_intake_column() -> None:
+    """Leitet neue persönliche Aufgaben unabhängig vom Request in die Neu-Spalte."""
+    owner = create_user("owner-personal-intake@example.test", "Owner Intake")
+    board = Board.objects.get(owner=owner)
+    regular_column = board.columns.exclude(system_role="new-assigned").first()
+
+    response = auth_client(owner).post(
+        reverse("task-list"),
+        {
+            "boardId": str(board.id),
+            "columnId": str(regular_column.id),
+            "title": "Immer zuerst Neu",
+            "assigneeId": str(owner.id),
+        },
+        format="json",
+    )
+
+    assert response.status_code == 201
+    task = Task.objects.get(pk=response.data["id"])
+    assert task.column.system_role == "new-assigned"
+
+
+def test_project_assignment_is_mirrored_to_personal_new_column() -> None:
+    """Spiegelt Projektzuweisungen in die persönliche Neu-Spalte des Empfängers."""
+    owner = create_user("owner-assignment@example.test", "Owner Assignment")
+    member = create_user("julia-assignment@example.test", "Julia Assignment")
+    workspace = owner.owned_workspaces.get()
+    WorkspaceMembership.objects.create(
+        workspace=workspace, user=member, role="member", avatar_color="#6558d3"
+    )
+    created = auth_client(owner).post(
+        reverse("project-list"),
+        {
+            "workspaceId": str(workspace.id),
+            "name": "Geteiltes Projekt",
+            "dueAt": str(timezone.localdate() + timedelta(days=30)),
+        },
+        format="json",
+    )
+    assert created.status_code == 201
+    project = workspace.projects.get(pk=created.data["id"])
+    ProjectParticipant.objects.create(project=project, user=member, role="collaborator")
+
+    task_response = auth_client(owner).post(
+        reverse("task-list"),
+        {
+            "boardId": str(project.board.id),
+            "columnId": str(project.board.columns.first().id),
+            "title": "Julia übernimmt",
+            "assigneeId": str(member.id),
+            "reviewHint": None,
+        },
+        format="json",
+    )
+
+    assert task_response.status_code == 201
+    source = Task.objects.get(pk=task_response.data["id"])
+    mirror = Task.objects.get(source_task=source, source_subtask__isnull=True)
+    assert mirror.board.owner == member
+    assert mirror.column.system_role == "new-assigned"
+    assert mirror.assignee == member
+    assert mirror.title == source.title
 
 
 def test_stale_task_update_returns_conflict() -> None:
@@ -196,8 +290,8 @@ def test_project_update_grants_collaborator_visibility() -> None:
     assert [item["id"] for item in data] == [created.data["id"]]
 
 
-def test_non_manager_cannot_create_project() -> None:
-    """Erfordert Workspace-Verwaltungsrechte für strukturelle Änderungen."""
+def test_regular_member_can_create_own_project_but_does_not_gain_workspace_management() -> None:
+    """Erlaubt eigene Projekte ohne daraus globale Workspace-Rechte abzuleiten."""
     owner = create_user("owner@example.test", "Owner")
     member = create_user("member@example.test", "Member")
     workspace = owner.owned_workspaces.get()
@@ -212,12 +306,34 @@ def test_non_manager_cannot_create_project() -> None:
         reverse("project-list"),
         {
             "workspaceId": str(workspace.id),
-            "name": "Nicht erlaubt",
+            "name": "Eigenes Projekt",
             "dueAt": str(timezone.localdate() + timedelta(days=10)),
+            "ownerId": str(owner.id),
         },
         format="json",
     )
-    assert response.status_code == 403
+    assert response.status_code == 201
+    assert response.data["owner"]["id"] == str(member.id)
+
+    project_board = Board.objects.get(project_id=response.data["id"])
+    task_response = client.post(
+        reverse("task-list"),
+        {
+            "boardId": str(project_board.id),
+            "columnId": str(project_board.columns.first().id),
+            "title": "Eigene Aufgabe",
+        },
+        format="json",
+    )
+    assert task_response.status_code == 201
+    assert task_response.data["owner"]["id"] == str(member.id)
+
+    forbidden_invite = client.post(
+        reverse("invitation-list"),
+        {"workspaceId": str(workspace.id), "email": "third@example.test", "projectId": None},
+        format="json",
+    )
+    assert forbidden_invite.status_code == 403
 
 
 def test_private_attachment_requires_task_access(settings, tmp_path) -> None:
@@ -256,7 +372,7 @@ def test_private_attachment_requires_task_access(settings, tmp_path) -> None:
 
 
 def test_subtask_assignment_creates_personal_mirror_for_member() -> None:
-    """Spiegelt zugewiesene Unteraufgaben in das persönliche Board des Mitglieds."""
+    """Spiegelt zugewiesene Projekt-Unteraufgaben in die persönliche Neu-Spalte."""
     owner = create_user("owner@example.test", "Owner")
     member = create_user("member@example.test", "Member")
     workspace = owner.owned_workspaces.get()
@@ -266,22 +382,38 @@ def test_subtask_assignment_creates_personal_mirror_for_member() -> None:
         role="member",
         avatar_color="#6558d3",
     )
-    board = Board.objects.get(owner=owner)
+    project_response = auth_client(owner).post(
+        reverse("project-list"),
+        {
+            "workspaceId": str(workspace.id),
+            "name": "Unteraufgaben-Projekt",
+            "dueAt": str(timezone.localdate() + timedelta(days=30)),
+        },
+        format="json",
+    )
+    assert project_response.status_code == 201
+    project = workspace.projects.get(pk=project_response.data["id"])
+    ProjectParticipant.objects.create(project=project, user=member, role="collaborator")
     task = Task.objects.create(
         workspace=workspace,
-        board=board,
-        column=board.columns.first(),
+        board=project.board,
+        column=project.board.columns.first(),
+        project=project,
         owner=owner,
         title="Hauptaufgabe",
     )
+
     response = auth_client(owner).post(
         reverse("task-subtasks", args=[task.id]),
         {"title": "Teilaufgabe", "assigneeId": str(member.id)},
         format="json",
     )
+
     assert response.status_code == 201
     subtask = task.subtasks.get()
-    assert Task.objects.filter(source_subtask=subtask, assignee=member).exists()
+    mirror = Task.objects.get(source_subtask=subtask, assignee=member)
+    assert mirror.board.owner == member
+    assert mirror.column.system_role == "new-assigned"
 
 
 def test_workspace_manager_can_remove_regular_member() -> None:
@@ -341,13 +473,13 @@ def test_registered_user_can_accept_in_app_invitation_without_email_verification
         reverse("invitation-list"),
         {
             "workspaceId": str(workspace.id),
-            "fullName": invitee.display_name,
             "email": invitee.email,
             "projectId": None,
         },
         format="json",
     )
     assert created.status_code == 201
+    assert created.data["fullName"] == invitee.display_name
     assert invitee.email_verified is False
     assert mail_calls == []
 
@@ -368,6 +500,20 @@ def test_registered_user_can_accept_in_app_invitation_without_email_verification
         user=invitee,
         is_active=True,
     ).exists()
+    personal_board = Board.objects.get(
+        workspace=workspace, owner=invitee, kind="personal"
+    )
+    personal_task = auth_client(invitee).post(
+        reverse("task-list"),
+        {
+            "boardId": str(personal_board.id),
+            "columnId": str(personal_board.columns.first().id),
+            "title": "Eigene Team-Aufgabe",
+        },
+        format="json",
+    )
+    assert personal_task.status_code == 201
+    assert personal_task.data["owner"]["id"] == str(invitee.id)
 
 
 def test_registered_user_can_reject_in_app_invitation() -> None:
@@ -400,6 +546,43 @@ def test_registered_user_can_reject_in_app_invitation() -> None:
     )
     data = sent.data["results"] if isinstance(sent.data, dict) else sent.data
     assert data[0]["status"] == "rejected"
+
+
+def test_board_and_archived_task_lists_are_workspace_scoped() -> None:
+    """Verhindert, dass persönliche oder archivierte Daten zwischen Workspaces vermischt werden."""
+    owner = create_user("scope-owner@example.test", "Scope Owner")
+    member = create_user("scope-member@example.test", "Scope Member")
+    team_workspace = owner.owned_workspaces.get()
+    personal_workspace = member.owned_workspaces.get()
+    WorkspaceMembership.objects.create(
+        workspace=team_workspace, user=member, role="member", avatar_color="#6558d3"
+    )
+    from apps.workspaces.services import ensure_personal_board_for_workspace
+
+    team_board = ensure_personal_board_for_workspace(user=member, workspace=team_workspace)
+    personal_board = Board.objects.get(workspace=personal_workspace, owner=member)
+    personal_task = Task.objects.create(
+        workspace=personal_workspace,
+        board=personal_board,
+        column=personal_board.columns.first(),
+        owner=member,
+        title="Privater Archivtask",
+        archived_at=timezone.now(),
+    )
+
+    client = auth_client(member)
+    boards = client.get(reverse("board-list"), {"workspaceId": str(team_workspace.id)})
+    assert boards.status_code == 200
+    board_data = boards.data["results"] if isinstance(boards.data, dict) else boards.data
+    assert [item["id"] for item in board_data] == [str(team_board.id)]
+
+    archived = client.get(
+        reverse("task-list"),
+        {"workspaceId": str(team_workspace.id), "archived": "true"},
+    )
+    assert archived.status_code == 200
+    archived_data = archived.data["results"] if isinstance(archived.data, dict) else archived.data
+    assert str(personal_task.id) not in [item["id"] for item in archived_data]
 
 
 def test_task_move_maps_frontend_target_position_to_service_argument() -> None:
