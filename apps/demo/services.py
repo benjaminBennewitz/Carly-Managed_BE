@@ -224,12 +224,13 @@ def _create_task(
     today = timezone.localdate()
     due_date = today + timedelta(days=due_days) if due_days is not None else None
     start_date = min(today - timedelta(days=1), due_date) if due_date else today - timedelta(days=1)
+    effective_column = None if is_shared_pool else column
     task = Task.objects.create(
         id=_stable_id(owner, f"task::{key}"),
         workspace=workspace,
         board=board,
         project=project,
-        column=column,
+        column=effective_column,
         owner=owner,
         assignee=assignee,
         title=title,
@@ -239,7 +240,7 @@ def _create_task(
         due_date=due_date,
         due_time=time(16, 0) if due_date else None,
         tags=tags or [],
-        position=Task.objects.filter(column=column).count(),
+        position=Task.objects.filter(board=board, column=effective_column).count(),
         is_done=is_done,
         completed_at=timezone.now() - timedelta(hours=5) if is_done else None,
         is_shared_pool=is_shared_pool,
@@ -594,7 +595,7 @@ def reset_demo_workspace(*, owner: User) -> DemoResetResult:
         key="studio-offers",
         title="Angebotsvorlagen vereinheitlichen",
         description="Textbausteine, Leistungspositionen und Freigaben für Angebote bündeln.",
-        assignee=mira,
+        assignee=None,
         due_days=10,
         tags=["Organisation"],
         is_shared_pool=True,

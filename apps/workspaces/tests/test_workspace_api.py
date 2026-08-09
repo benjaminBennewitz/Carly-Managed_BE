@@ -4,6 +4,7 @@
 from datetime import timedelta
 
 import pytest
+from django.db import IntegrityError, transaction
 from django.db.models import Max
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
@@ -14,6 +15,7 @@ from apps.accounts.models import User
 from apps.workspaces.models import (
     Board,
     BoardColumn,
+    Project,
     ProjectParticipant,
     Task,
     Workspace,
@@ -462,6 +464,44 @@ def test_workspace_manager_can_remove_regular_member() -> None:
     assert User.objects.filter(pk=member.pk).exists() is True
 
 
+def test_removed_team_member_loses_team_project_access() -> None:
+    """Entzieht nach der Entfernung auch den Zugriff auf teamweit sichtbare Projekte."""
+    owner = create_user("owner-remove-access@example.test", "Owner Remove Access")
+    member = create_user("member-remove-access@example.test", "Member Remove Access")
+    workspace = owner.owned_workspaces.get()
+    WorkspaceMembership.objects.create(
+        workspace=workspace,
+        user=member,
+        role="member",
+        avatar_color="#6558d3",
+    )
+    created = auth_client(owner).post(
+        reverse("project-list"),
+        {
+            "workspaceId": str(workspace.id),
+            "name": "Teamzugriff",
+            "visibility": "workspace",
+            "dueAt": str(timezone.localdate() + timedelta(days=14)),
+        },
+        format="json",
+    )
+    assert created.status_code == 201
+    before = auth_client(member).get(reverse("project-list"))
+    before_items = before.data["results"] if isinstance(before.data, dict) else before.data
+    assert created.data["id"] in {item["id"] for item in before_items}
+
+    removed = auth_client(owner).delete(
+        reverse("workspace-members", args=[workspace.id]),
+        {"memberId": str(member.id)},
+        format="json",
+    )
+    assert removed.status_code == 204
+
+    after = auth_client(member).get(reverse("project-list"))
+    after_items = after.data["results"] if isinstance(after.data, dict) else after.data
+    assert created.data["id"] not in {item["id"] for item in after_items}
+
+
 def test_workspace_owner_cannot_remove_self() -> None:
     """Schützt den einzigen Workspace-Owner vor versehentlicher Selbstentfernung."""
     owner = create_user("owner-self@example.test", "Owner")
@@ -893,10 +933,94 @@ def test_pool_task_claim_moves_canonical_task_to_personal_intake() -> None:
     task = Task.objects.get(pk=task_id)
     assert task.is_shared_pool is False
     assert task.project is None
+    assert task.pool_source_project == project
     assert task.board.owner == owner
     assert task.column.system_role == "new-assigned"
     pool = auth_client(owner).get(reverse("task-list"), {"pool": "true"})
     assert all(item["id"] != str(task.id) for item in pool.data["results"])
+
+    member = create_user("member-pool-claim@example.test", "Member Pool")
+    WorkspaceMembership.objects.create(
+        workspace=team,
+        user=member,
+        role="member",
+        avatar_color="#6558d3",
+    )
+    reassigned = auth_client(owner).patch(
+        reverse("task-detail", args=[task.id]),
+        {"assigneeId": str(member.id), "version": claimed.data["version"]},
+        format="json",
+    )
+    assert reassigned.status_code == 200
+    task.refresh_from_db()
+    assert task.assignee == member
+    assert task.board.owner == member
+    assert task.pool_source_project == project
+    assert task.is_shared_pool is False
+
+    returned = auth_client(member).patch(
+        reverse("task-detail", args=[task.id]),
+        {"assigneeId": None, "version": reassigned.data["version"]},
+        format="json",
+    )
+    assert returned.status_code == 200
+    task.refresh_from_db()
+    assert task.is_shared_pool is True
+    assert task.assignee is None
+    assert task.project == project
+    assert task.board == project.board
+    assert task.column is None
+    pool = auth_client(owner).get(reverse("task-list"), {"pool": "true"})
+    assert any(item["id"] == str(task.id) for item in pool.data["results"])
+
+
+def test_assigned_pool_task_cannot_be_persisted() -> None:
+    """Verhindert den fachlich unmöglichen Zustand aus Zuweisung und Poolstatus."""
+    owner = create_user("owner-pool-invariant@example.test", "Owner Pool Invariant")
+    team = Workspace.objects.get(owner=owner)
+    project_response = auth_client(owner).post(
+        reverse("project-list"),
+        {
+            "workspaceId": str(team.id),
+            "name": "Pool Invariant",
+            "dueAt": str(timezone.localdate() + timedelta(days=14)),
+        },
+        format="json",
+    )
+    project = team.projects.get(pk=project_response.data["id"])
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        Task.objects.create(
+            workspace=team,
+            board=project.board,
+            project=project,
+            owner=owner,
+            assignee=owner,
+            title="Inkonsistente Pool-Aufgabe",
+            is_shared_pool=True,
+        )
+
+
+def test_dynamic_intake_column_must_remain_first() -> None:
+    """Verhindert serverseitig das Verschieben der dynamischen Neu-Spalte."""
+    owner = create_user("owner-intake-order@example.test", "Owner Intake Order")
+    board = Board.objects.get(owner=owner)
+    columns = list(board.columns.order_by("position"))
+    intake = next(column for column in columns if column.system_role == "new-assigned")
+    other = next(column for column in columns if column.id != intake.id)
+    reordered_ids = [other.id, intake.id, *[
+        column.id for column in columns if column.id not in {other.id, intake.id}
+    ]]
+
+    response = auth_client(owner).post(
+        reverse("board-reorder-columns", args=[board.id]),
+        {"columnIds": [str(column_id) for column_id in reordered_ids], "version": board.version},
+        format="json",
+    )
+
+    assert response.status_code == 409
+    intake.refresh_from_db()
+    assert intake.position == 0
 
 
 def test_column_with_tasks_can_be_moved_and_deleted_atomically() -> None:
@@ -977,6 +1101,59 @@ def test_team_owner_can_create_update_and_delete_additional_team() -> None:
     )
     assert deleted.status_code == 204
     assert Workspace.objects.filter(pk=team_id).exists() is False
+
+
+def test_project_owner_can_move_project_to_another_team() -> None:
+    """Verschiebt Projekt, Board und Projekttasks konsistent in ein anderes eigenes Team."""
+    owner = create_user("owner-project-team@example.test", "Owner Project Team")
+    client = auth_client(owner)
+    source_workspace = Workspace.objects.get(owner=owner)
+    target_response = client.post(
+        reverse("workspace-list"),
+        {"name": "Produktteam", "allowInvites": True},
+        format="json",
+    )
+    assert target_response.status_code == 201
+    target_workspace = Workspace.objects.get(pk=target_response.data["id"])
+
+    created = client.post(
+        reverse("project-list"),
+        {
+            "workspaceId": str(source_workspace.id),
+            "name": "Teamwechsel Projekt",
+            "dueAt": str(timezone.localdate() + timedelta(days=14)),
+        },
+        format="json",
+    )
+    assert created.status_code == 201
+    project = Project.objects.get(pk=created.data["id"])
+    task = Task.objects.create(
+        workspace=source_workspace,
+        board=project.board,
+        column=project.board.columns.first(),
+        project=project,
+        owner=owner,
+        title="Mit dem Projekt verschieben",
+    )
+
+    moved = client.patch(
+        reverse("project-detail", args=[project.id]),
+        {
+            "workspaceId": str(target_workspace.id),
+            "version": project.version,
+        },
+        format="json",
+    )
+
+    assert moved.status_code == 200
+    assert moved.data["workspaceId"] == str(target_workspace.id)
+    assert moved.data["workspaceName"] == target_workspace.name
+    project.refresh_from_db()
+    project.board.refresh_from_db()
+    task.refresh_from_db()
+    assert project.workspace == target_workspace
+    assert project.board.workspace == target_workspace
+    assert task.workspace == target_workspace
 
 
 def test_disabled_team_invites_block_manager_but_not_project_manager_invites() -> None:

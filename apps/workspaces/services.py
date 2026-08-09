@@ -365,14 +365,18 @@ def update_project(
     actor: User,
     validated_data: dict[str, Any],
     supplied_version: int | None,
+    target_workspace: Workspace | None = None,
 ) -> Project:
-    """Aktualisiert Projektfelder und Rollen unter Versionskontrolle."""
+    """Aktualisiert Projektfelder, Rollen und optional den Teamkontext."""
     locked = (
         Project.objects.select_for_update(of=("self",))
         .select_related("board")
         .get(pk=project.pk)
     )
     assert_version(locked, supplied_version)
+    previous_workspace = locked.workspace
+    target_workspace = target_workspace or previous_workspace
+    workspace_changed = target_workspace.id != previous_workspace.id
     previous_visibility = locked.visibility
     previous_recipient_ids = set(
         WorkspaceMembership.objects.filter(
@@ -382,9 +386,10 @@ def update_project(
         ).values_list("user_id", flat=True)
     )
     previous_recipient_ids.add(locked.owner_id)
-    previous_recipient_ids.update(
+    previous_participant_ids = set(
         locked.participants.values_list("user_id", flat=True)
     )
+    previous_recipient_ids.update(previous_participant_ids)
     if previous_visibility == ProjectVisibility.WORKSPACE:
         previous_recipient_ids.update(
             WorkspaceMembership.objects.filter(
@@ -396,7 +401,7 @@ def update_project(
     manager_users = validated_data.pop("manager_users", None)
     collaborator_users = validated_data.pop("collaborator_users", None)
     is_pinned = validated_data.pop("is_pinned_input", None)
-    meaningful_change = any(
+    meaningful_change = workspace_changed or any(
         getattr(locked, field) != value for field, value in validated_data.items()
     )
     if manager_users is not None:
@@ -422,10 +427,22 @@ def update_project(
         )
     for field, value in validated_data.items():
         setattr(locked, field, value)
+    board_update_fields: list[str] = []
+    if workspace_changed:
+        locked.workspace = target_workspace
+        locked.route_key = _unique_project_route_key(target_workspace, locked.name)
+        locked.board.workspace = target_workspace
+        board_update_fields.append("workspace")
+        Task.objects.filter(project=locked).update(workspace=target_workspace)
+        WorkspaceInvitation.objects.filter(project=locked).update(workspace=target_workspace)
     if "name" in validated_data and locked.board.title != locked.name:
         locked.board.title = locked.name
+        board_update_fields.append("title")
+    if board_update_fields:
         increment_version(locked.board)
-        locked.board.save(update_fields=("title", "version", "updated_at"))
+        locked.board.save(
+            update_fields=(*board_update_fields, "version", "updated_at")
+        )
     increment_version(locked)
     locked.full_clean()
     locked.save()
@@ -512,6 +529,11 @@ def update_project(
     if is_pinned is not None:
         ProjectPreference.objects.update_or_create(
             project=locked, user=actor, defaults={"is_pinned": is_pinned}
+        )
+    if workspace_changed:
+        cleanup_unused_project_guests(
+            workspace=previous_workspace,
+            user_ids=previous_participant_ids,
         )
     current_recipient_ids = set(
         WorkspaceMembership.objects.filter(
@@ -720,6 +742,8 @@ def create_task(
 ) -> Task:
     """Erstellt einen Task, ordnet ihn ein und führt passende Regeln aus."""
     collaborators = validated_data.pop("collaborators", [])
+    if validated_data.get("assignee") is not None:
+        validated_data["is_shared_pool"] = False
     _ensure_project_access_for_users(
         project=board.project,
         users=[validated_data.get("assignee"), *collaborators],
@@ -778,12 +802,26 @@ def update_task(
     validated_data: dict[str, Any],
     supplied_version: int | None,
 ) -> Task:
-    """Aktualisiert einen Task und behandelt Zuweisungsregeln atomar."""
-    locked = Task.objects.select_for_update().get(pk=task.pk)
+    """Aktualisiert einen Task und erzwingt konsistente Pool- und Zuweisungszustände."""
+    locked = (
+        Task.objects.select_for_update()
+        .select_related("board", "project", "pool_source_project")
+        .get(pk=task.pk)
+    )
     assert_version(locked, supplied_version)
+    old_board_id = locked.board_id
     old_assignee_id = locked.assignee_id
     collaborators = validated_data.pop("collaborators", None)
     target_column = validated_data.pop("column", None)
+    assignee_supplied = "assignee" in validated_data
+    requested_assignee = validated_data.get("assignee", locked.assignee)
+    explicit_pool_release = validated_data.get("is_shared_pool") is True
+    returning_shared_task = (
+        assignee_supplied
+        and requested_assignee is None
+        and (locked.pool_source_project_id is not None or locked.project_id is not None)
+    )
+    assigning_pool_task = locked.is_shared_pool and requested_assignee is not None
     meaningful_change = any(
         getattr(locked, field) != value for field, value in validated_data.items()
     )
@@ -793,32 +831,113 @@ def update_task(
         meaningful_change = meaningful_change or current_collaborators != desired_collaborators
     if target_column is not None and target_column.id != locked.column_id:
         meaningful_change = True
-    for field, value in validated_data.items():
-        setattr(locked, field, value)
-    if locked.is_shared_pool:
+
+    if explicit_pool_release or returning_shared_task:
+        source_project = locked.pool_source_project or locked.project
+        if source_project is None:
+            raise ValidationError(
+                {"isSharedPool": "Die Aufgabe besitzt keinen gemeinsamen Projekt-Pool."}
+            )
+        locked.pool_source_project = source_project
+        locked.project = source_project
+        locked.workspace = source_project.workspace
+        locked.board = source_project.board
         locked.column = None
-        locked.position = _next_position(Task, column=None, archived_at__isnull=True)
-    elif target_column is not None and target_column.id != locked.column_id:
-        locked.column = target_column
-        locked.position = _next_position(Task, column=target_column, archived_at__isnull=True)
+        locked.assignee = None
+        locked.is_shared_pool = True
+        locked.requires_review = False
+        locked.review_hint = ""
+        locked.position = _next_position(
+            Task,
+            project=source_project,
+            is_shared_pool=True,
+            archived_at__isnull=True,
+        )
+        validated_data.pop("assignee", None)
+        validated_data.pop("is_shared_pool", None)
+        target_column = None
+    elif assigning_pool_task or (
+        locked.board.kind == BoardKind.PERSONAL
+        and assignee_supplied
+        and requested_assignee is not None
+        and requested_assignee.id != locked.board.owner_id
+    ):
+        if locked.project_id and locked.pool_source_project_id is None:
+            locked.pool_source_project = locked.project
+        personal_board = ensure_personal_board(user=requested_assignee)
+        intake_column = _ensure_personal_intake_column(
+            board=personal_board, user=requested_assignee
+        )
+        locked.workspace = personal_board.workspace
+        locked.board = personal_board
+        locked.project = None
+        locked.column = intake_column
+        locked.assignee = requested_assignee
+        locked.is_shared_pool = False
+        locked.requires_review = False
+        locked.review_hint = ""
+        locked.position = _next_position(
+            Task, column=intake_column, archived_at__isnull=True
+        )
+        validated_data.pop("assignee", None)
+        validated_data.pop("is_shared_pool", None)
+        target_column = None
+    else:
+        if requested_assignee is not None:
+            validated_data["is_shared_pool"] = False
+        for field, value in validated_data.items():
+            setattr(locked, field, value)
+        if locked.is_shared_pool:
+            locked.assignee = None
+            locked.column = None
+            locked.position = _next_position(
+                Task,
+                project=locked.project,
+                is_shared_pool=True,
+                archived_at__isnull=True,
+            )
+        elif target_column is not None and target_column.id != locked.column_id:
+            locked.column = target_column
+            locked.position = _next_position(
+                Task, column=target_column, archived_at__isnull=True
+            )
+
     increment_version(locked)
     locked.full_clean()
     locked.save()
     if collaborators is not None:
         locked.collaborators.set(collaborators)
     _ensure_project_access_for_users(
-        project=locked.project,
+        project=locked.project or locked.pool_source_project,
         users=[locked.assignee, *(collaborators or list(locked.collaborators.all()))],
     )
     _sync_assignment_mirror(locked)
     add_history(task=locked, actor=actor, action="Task aktualisiert", icon="edit_note")
     if old_assignee_id != locked.assignee_id:
-        execute_automation_rules(task=locked, trigger=AutomationTrigger.TASK_ASSIGNED, actor=actor)
+        execute_automation_rules(
+            task=locked, trigger=AutomationTrigger.TASK_ASSIGNED, actor=actor
+        )
     if target_column is not None:
-        execute_automation_rules(task=locked, trigger=AutomationTrigger.COLUMN_ENTERED, actor=actor)
-    _broadcast_board(
-        locked.board_id, "task.updated", {"taskId": str(locked.id), "version": locked.version}
-    )
+        execute_automation_rules(
+            task=locked, trigger=AutomationTrigger.COLUMN_ENTERED, actor=actor
+        )
+    if old_board_id != locked.board_id:
+        _broadcast_board(old_board_id, "task.deleted", {"taskId": str(locked.id)})
+        _broadcast_board(
+            locked.board_id,
+            "task.created",
+            {
+                "taskId": str(locked.id),
+                "columnId": str(locked.column_id) if locked.column_id else None,
+                "version": locked.version,
+            },
+        )
+    else:
+        _broadcast_board(
+            locked.board_id,
+            "task.updated",
+            {"taskId": str(locked.id), "version": locked.version},
+        )
     if meaningful_change:
         bucket = int(timezone.now().timestamp() // 300)
         award_carly_reward_safely(
@@ -850,11 +969,13 @@ def claim_pool_task(*, task: Task, actor: User, assignee: User) -> Task:
 
     source_board_id = locked.board_id
     source_task_id = str(locked.id)
+    source_project = locked.project
     personal_board = ensure_personal_board(user=assignee)
     intake_column = _ensure_personal_intake_column(board=personal_board, user=assignee)
 
     locked.workspace = personal_board.workspace
     locked.board = personal_board
+    locked.pool_source_project = source_project
     locked.project = None
     locked.column = intake_column
     locked.assignee = assignee
@@ -868,6 +989,7 @@ def claim_pool_task(*, task: Task, actor: User, assignee: User) -> Task:
             "workspace",
             "board",
             "project",
+            "pool_source_project",
             "column",
             "assignee",
             "is_shared_pool",

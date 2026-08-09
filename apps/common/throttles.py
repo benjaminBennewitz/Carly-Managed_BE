@@ -28,6 +28,13 @@ class VerificationRateThrottle(UserRateThrottle):
     scope = "auth_verify"
 
 
+class AccountTokenRateThrottle(AnonRateThrottle):
+    """Begrenzt öffentliche Einmal-Token-Prüfungen unabhängig vom Mailversand."""
+
+    scope = "auth_token"
+    rate = "30/min"
+
+
 class UploadRateThrottle(UserRateThrottle):
     """Begrenzt Datei-Uploads je angemeldetem Nutzer."""
 

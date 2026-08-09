@@ -2,6 +2,7 @@
 """Stellt sichere, klar begrenzte Kontoendpunkte bereit."""
 
 from django.contrib.auth import update_session_auth_hash
+from django.db import transaction
 from django.middleware.csrf import get_token
 from django.utils import timezone
 from django.utils.decorators import method_decorator
@@ -9,6 +10,7 @@ from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import permissions, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -30,8 +32,10 @@ from apps.accounts.services import (
     register_user,
     request_password_reset,
     send_verification_email,
+    validate_account_token,
 )
 from apps.common.throttles import (
+    AccountTokenRateThrottle,
     LoginRateThrottle,
     RecoveryRateThrottle,
     RegistrationRateThrottle,
@@ -179,7 +183,7 @@ class VerificationConfirmView(APIView):
 
     authentication_classes: list[type] = []
     permission_classes = [permissions.AllowAny]
-    throttle_classes = [RecoveryRateThrottle]
+    throttle_classes = [AccountTokenRateThrottle]
 
     @extend_schema(request=TokenSerializer, responses={200: CurrentUserSerializer})
     def post(self, request: Request) -> Response:
@@ -217,30 +221,74 @@ class PasswordResetRequestView(APIView):
 
 
 @method_decorator(csrf_protect, name="dispatch")
+class PasswordResetValidateView(APIView):
+    """Prüft einen Reset-Link frühzeitig, ohne das Einmal-Token zu verbrauchen."""
+
+    authentication_classes: list[type] = []
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [AccountTokenRateThrottle]
+
+    @extend_schema(request=TokenSerializer, responses={200: OpenApiTypes.OBJECT})
+    def post(self, request: Request) -> Response:
+        """Bestätigt ausschließlich die aktuelle Nutzbarkeit des Reset-Tokens."""
+        serializer = TokenSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validate_account_token(
+            raw_token=serializer.validated_data["token"],
+            purpose=AccountTokenPurpose.RESET_PASSWORD,
+        )
+        return Response({"valid": True})
+
+
+@method_decorator(csrf_protect, name="dispatch")
 class PasswordResetConfirmView(APIView):
     """Setzt das Passwort mit einem kurzlebigen Einmal-Token zurück."""
 
     authentication_classes: list[type] = []
     permission_classes = [permissions.AllowAny]
-    throttle_classes = [RecoveryRateThrottle]
+    throttle_classes = [AccountTokenRateThrottle]
 
     @extend_schema(request=PasswordResetConfirmSerializer, responses={204: None})
     def post(self, request: Request) -> Response:
         """Ändert das Passwort und hebt bestehende Sperren auf."""
         serializer = PasswordResetConfirmSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        token = consume_account_token(
-            raw_token=serializer.validated_data["token"],
+        raw_token = serializer.validated_data["token"]
+        new_password = serializer.validated_data["newPassword"]
+        preview = validate_account_token(
+            raw_token=raw_token,
             purpose=AccountTokenPurpose.RESET_PASSWORD,
         )
-        user = token.user
-        user.set_password(serializer.validated_data["newPassword"])
-        user.failed_login_count = 0
-        user.locked_until = None
-        user.save(update_fields=("password", "failed_login_count", "locked_until"))
-        AccountToken.objects.filter(
-            user=user,
-            purpose=AccountTokenPurpose.RESET_PASSWORD,
-            used_at__isnull=True,
-        ).update(used_at=timezone.now())
+        if preview.user.check_password(new_password):
+            raise ValidationError(
+                {
+                    "newPassword": (
+                        "Das neue Passwort muss sich vom bisherigen Passwort unterscheiden."
+                    )
+                }
+            )
+
+        with transaction.atomic():
+            token = consume_account_token(
+                raw_token=raw_token,
+                purpose=AccountTokenPurpose.RESET_PASSWORD,
+            )
+            user = token.user
+            if user.check_password(new_password):
+                raise ValidationError(
+                    {
+                        "newPassword": (
+                            "Das neue Passwort muss sich vom bisherigen Passwort unterscheiden."
+                        )
+                    }
+                )
+            user.set_password(new_password)
+            user.failed_login_count = 0
+            user.locked_until = None
+            user.save(update_fields=("password", "failed_login_count", "locked_until"))
+            AccountToken.objects.filter(
+                user=user,
+                purpose=AccountTokenPurpose.RESET_PASSWORD,
+                used_at__isnull=True,
+            ).update(used_at=timezone.now())
         return Response(status=status.HTTP_204_NO_CONTENT)

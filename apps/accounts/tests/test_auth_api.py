@@ -128,18 +128,16 @@ def test_registration_rejects_weak_password() -> None:
     assert "password" in response.data["fields"]
 
 
-def test_duplicate_registration_returns_clear_email_error() -> None:
-    """Kennzeichnet eine bereits verwendete E-Mail-Adresse verständlich am Feld."""
+def test_duplicate_registration_uses_generic_error() -> None:
+    """Gibt keine eindeutige Kontoauskunft über den Registrierungsendpunkt preis."""
     client, token = csrf_client()
     assert register(client, token).status_code == 201
     client.logout()
     client.get(reverse("csrf"))
     duplicate = register(client, client.cookies["cm_csrftoken"].value)
     assert duplicate.status_code == 400
-    assert duplicate.data["fields"]["email"][0]["code"] == "email_in_use"
-    assert duplicate.data["fields"]["email"][0]["message"] == (
-        "Diese E-Mail-Adresse wird bereits verwendet."
-    )
+    assert duplicate.data["fields"]["email"][0]["code"] == "registration_failed"
+    assert "besteht bereits" not in duplicate.data["fields"]["email"][0]["message"]
 
 
 def test_login_uses_generic_error_and_locks_repeated_failures() -> None:
@@ -220,6 +218,66 @@ def test_password_reset_is_non_enumerating_and_token_is_single_use() -> None:
         HTTP_X_CSRFTOKEN=token,
     )
     assert replay.status_code == 400
+
+
+def test_password_reset_link_is_prevalidated_and_rejects_current_password() -> None:
+    """Prüft Reset-Links frühzeitig und lässt das aktuelle Passwort nicht erneut zu."""
+    user = User.objects.create_user(
+        email="reset-preview@example.test",
+        password=STRONG_PASSWORD,
+        display_name="Reset Vorschau",
+        privacy_acknowledged_at=timezone.now(),
+    )
+    client, csrf = csrf_client()
+    requested = client.post(
+        reverse("password-reset-request"),
+        {"email": user.email},
+        format="json",
+        HTTP_X_CSRFTOKEN=csrf,
+    )
+    assert requested.status_code == 200
+    raw_token = re.search(r"token=([^\s]+)", mail.outbox[-1].body).group(1)
+
+    preview = client.post(
+        reverse("password-reset-validate"),
+        {"token": raw_token},
+        format="json",
+        HTTP_X_CSRFTOKEN=csrf,
+    )
+    assert preview.status_code == 200
+    assert preview.data["valid"] is True
+
+    unchanged = client.post(
+        reverse("password-reset-confirm"),
+        {"token": raw_token, "newPassword": STRONG_PASSWORD},
+        format="json",
+        HTTP_X_CSRFTOKEN=csrf,
+    )
+    assert unchanged.status_code == 400
+
+    still_valid = client.post(
+        reverse("password-reset-validate"),
+        {"token": raw_token},
+        format="json",
+        HTTP_X_CSRFTOKEN=csrf,
+    )
+    assert still_valid.status_code == 200
+
+    changed = client.post(
+        reverse("password-reset-confirm"),
+        {"token": raw_token, "newPassword": "Anders!Und-Sicher-2026"},
+        format="json",
+        HTTP_X_CSRFTOKEN=csrf,
+    )
+    assert changed.status_code == 204
+
+    consumed = client.post(
+        reverse("password-reset-validate"),
+        {"token": raw_token},
+        format="json",
+        HTTP_X_CSRFTOKEN=csrf,
+    )
+    assert consumed.status_code == 400
 
 
 def test_expired_verification_token_is_rejected() -> None:

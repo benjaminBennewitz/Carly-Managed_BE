@@ -287,7 +287,10 @@ class TaskSerializer(MemberLookupMixin, serializers.ModelSerializer[Task]):
     """Gibt einen vollständigen WorkspaceTask-Datensatz aus."""
 
     projectId = serializers.UUIDField(source="project_id", allow_null=True, read_only=True)
-    projectTitle = serializers.CharField(source="project.name", allow_null=True, read_only=True)
+    poolSourceProjectId = serializers.UUIDField(
+        source="pool_source_project_id", allow_null=True, read_only=True
+    )
+    projectTitle = serializers.SerializerMethodField()
     projectAllowsOnDemandTasks = serializers.SerializerMethodField()
     parentTaskId = serializers.UUIDField(source="parent_task_id", allow_null=True, read_only=True)
     parentTaskTitle = serializers.CharField(
@@ -332,6 +335,7 @@ class TaskSerializer(MemberLookupMixin, serializers.ModelSerializer[Task]):
             "title",
             "description",
             "projectId",
+            "poolSourceProjectId",
             "projectTitle",
             "projectAllowsOnDemandTasks",
             "parentTaskId",
@@ -370,9 +374,15 @@ class TaskSerializer(MemberLookupMixin, serializers.ModelSerializer[Task]):
             "version",
         )
 
+    def get_projectTitle(self, obj: Task) -> str | None:
+        """Liefert den aktiven oder ursprünglichen Projektkontext einer Aufgabe."""
+        project = obj.project or obj.pool_source_project
+        return project.name if project else None
+
     def get_projectAllowsOnDemandTasks(self, obj: Task) -> bool:
         """Liefert die projektspezifische Abruf-Aufgaben-Einstellung."""
-        return bool(obj.project and obj.project.allows_on_demand_tasks)
+        project = obj.project or obj.pool_source_project
+        return bool(project and project.allows_on_demand_tasks)
 
     def get_isSubtaskMirror(self, obj: Task) -> bool:
         """Erkennt persönliche Spiegelaufgaben einer Unteraufgabe."""
@@ -506,7 +516,11 @@ class TaskWriteSerializer(serializers.ModelSerializer[Task]):
             ).exists()
             if not shares_team:
                 raise serializers.ValidationError(
-                    {"assigneeId": "Aufgaben können nur Personen aus deinen Teams zugewiesen werden."}
+                    {
+                        "assigneeId": (
+                            "Aufgaben können nur Personen aus deinen Teams zugewiesen werden."
+                        )
+                    }
                 )
         if board.kind == BoardKind.PERSONAL and collaborators:
             raise serializers.ValidationError(
@@ -736,6 +750,7 @@ class ProjectWriteSerializer(serializers.ModelSerializer[Project]):
     """Validiert Projektdaten und Teilnehmer-IDs getrennt vom Ausgabevertrag."""
 
     id = serializers.UUIDField(required=False)
+    workspaceId = serializers.UUIDField(required=False, write_only=True)
     slugLabel = serializers.CharField(
         source="slug_label", min_length=2, max_length=24, required=False
     )
@@ -757,6 +772,7 @@ class ProjectWriteSerializer(serializers.ModelSerializer[Project]):
         model = Project
         fields = (
             "id",
+            "workspaceId",
             "name",
             "slugLabel",
             "description",

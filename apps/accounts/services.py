@@ -62,8 +62,8 @@ def register_user(
             {
                 "email": [
                     ErrorDetail(
-                        "Diese E-Mail-Adresse wird bereits verwendet.",
-                        code="email_in_use",
+                        "Die Registrierung konnte nicht abgeschlossen werden.",
+                        code="registration_failed",
                     )
                 ]
             }
@@ -156,6 +156,19 @@ def issue_account_token(*, user: User, purpose: str, request: HttpRequest) -> Is
         requested_ip=get_client_ip(request),
     )
     return IssuedToken(raw=raw, record=record)
+
+
+def validate_account_token(*, raw_token: str, purpose: str) -> AccountToken:
+    """Prüft ein Einmal-Token ohne es zu verbrauchen."""
+    token_hash = AccountToken.hash_token(raw_token)
+    token = (
+        AccountToken.objects.select_related("user")
+        .filter(token_hash=token_hash, purpose=purpose)
+        .first()
+    )
+    if token is None or not token.is_usable:
+        raise ValidationError("Das Token ist ungültig oder abgelaufen.", code="invalid_token")
+    return token
 
 
 @transaction.atomic

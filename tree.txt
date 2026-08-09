@@ -5,5 +5,4 @@ docs/
 ├── make-tree.ps1
 ├── openapi.yml
 ├── QUALITAETSBERICHT.md
-├── SECURITY.md
-└── tree.txt
+└── SECURITY.md

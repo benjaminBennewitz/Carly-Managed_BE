@@ -65,6 +65,7 @@ def tasks_for_user(user: User) -> QuerySet[Task]:
             "board",
             "column",
             "project",
+            "pool_source_project",
             "owner",
             "assignee",
             "parent_task",
@@ -92,6 +93,7 @@ def pool_tasks_for_user(user: User) -> QuerySet[Task]:
             Q(project_id__in=project_ids)
             | Q(project__isnull=True, workspace_id__in=workspace_ids),
             is_shared_pool=True,
+            assignee__isnull=True,
             archived_at__isnull=True,
         )
         .select_related(
@@ -99,6 +101,7 @@ def pool_tasks_for_user(user: User) -> QuerySet[Task]:
             "board",
             "column",
             "project",
+            "pool_source_project",
             "owner",
             "assignee",
             "parent_task",

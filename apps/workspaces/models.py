@@ -288,6 +288,13 @@ class Task(UUIDModel, TimeStampedModel, VersionedModel):
         blank=True,
         null=True,
     )
+    pool_source_project = models.ForeignKey(
+        Project,
+        on_delete=models.SET_NULL,
+        related_name="claimed_pool_tasks",
+        blank=True,
+        null=True,
+    )
     parent_task = models.ForeignKey(
         "self",
         on_delete=models.CASCADE,
@@ -367,6 +374,14 @@ class Task(UUIDModel, TimeStampedModel, VersionedModel):
                 | Q(due_date__gte=models.F("start_date")),
                 name="task_due_after_start",
             ),
+            models.CheckConstraint(
+                condition=Q(is_shared_pool=False) | Q(assignee__isnull=True),
+                name="task_pool_requires_unassigned",
+            ),
+            models.CheckConstraint(
+                condition=Q(is_shared_pool=False) | Q(column__isnull=True),
+                name="task_pool_requires_no_column",
+            ),
         ]
 
     def __str__(self) -> str:
@@ -380,6 +395,16 @@ class Task(UUIDModel, TimeStampedModel, VersionedModel):
             from django.core.exceptions import ValidationError
 
             raise ValidationError({"column": "Die Spalte gehört nicht zu diesem Board."})
+        if self.is_shared_pool and self.assignee_id is not None:
+            from django.core.exceptions import ValidationError
+
+            raise ValidationError(
+                {"assignee": "Poolaufgaben dürfen keine verantwortliche Person besitzen."}
+            )
+        if self.is_shared_pool and self.column_id is not None:
+            from django.core.exceptions import ValidationError
+
+            raise ValidationError({"column": "Poolaufgaben dürfen keiner Boardspalte angehören."})
         if (
             self.project_id
             and self.board.project_id != self.project_id

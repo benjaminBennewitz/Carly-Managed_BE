@@ -120,9 +120,14 @@ def _broadcast_board(board_id: Any, event_type: str, payload: dict[str, Any]) ->
     transaction.on_commit(lambda: broadcast_board_event(board_id, event_type, payload))
 
 
-def _reindex_board_columns(board: Board) -> None:
+def _reindex_board_columns(
+    board: Board, *, ordered_ids: list[Any] | None = None
+) -> None:
     """Verdichtet Spaltenpositionen ohne temporäre Unique-Konflikte."""
     columns = list(board.columns.order_by("position", "created_at", "id"))
+    if ordered_ids is not None:
+        mapping = {column.id: column for column in columns}
+        columns = [mapping[column_id] for column_id in ordered_ids]
     if not columns:
         return
 
@@ -275,6 +280,10 @@ class WorkspaceViewSet(viewsets.ModelViewSet[Workspace]):
             )
         if role not in WorkspaceRole.values:
             raise ValidationError({"role": "Ungültige Workspace-Rolle."})
+        if role == WorkspaceRole.OWNER and membership.role != WorkspaceRole.OWNER:
+            raise ConflictError(
+                "Die Owner-Rolle kann nicht über die Mitgliederverwaltung vergeben werden."
+            )
         membership.role = role
         membership.avatar_color = avatar_color
         membership.full_clean()
@@ -321,6 +330,7 @@ class ProjectViewSet(viewsets.ModelViewSet[Project]):
         )
         serializer.is_valid(raise_exception=True)
         validated_data = dict(serializer.validated_data)
+        validated_data.pop("workspaceId", None)
         validated_data["owner"] = request.user
         project = create_project(
             workspace=workspace, actor=request.user, validated_data=validated_data
@@ -331,22 +341,39 @@ class ProjectViewSet(viewsets.ModelViewSet[Project]):
         )
 
     def partial_update(self, request: Any, *args: Any, **kwargs: Any) -> Response:
-        """Aktualisiert ein Projekt mit optimistischer Sperre."""
+        """Aktualisiert ein Projekt inklusive optionalem Wechsel des Teamkontexts."""
         project = self.get_object()
         require_project_manager(user=request.user, project=project)
+        target_workspace = project.workspace
+        requested_workspace_id = request.data.get("workspaceId")
+        if requested_workspace_id and str(requested_workspace_id) != str(project.workspace_id):
+            if project.owner_id != request.user.id:
+                raise PermissionDenied(
+                    "Nur der Projektowner kann ein Projekt einem anderen Team zuweisen."
+                )
+            target_workspace = (
+                workspaces_for_user(request.user)
+                .filter(pk=requested_workspace_id)
+                .first()
+            )
+            if target_workspace is None:
+                raise NotFound("Ziel-Team nicht gefunden oder nicht zugänglich.")
+
         serializer = ProjectWriteSerializer(
             project,
             data=request.data,
             partial=True,
-            context={**_serializer_context(self), "workspace": project.workspace},
+            context={**_serializer_context(self), "workspace": target_workspace},
         )
         serializer.is_valid(raise_exception=True)
         supplied_version = serializer.validated_data.pop("version", None)
+        serializer.validated_data.pop("workspaceId", None)
         updated = update_project(
             project=project,
             actor=request.user,
             validated_data=dict(serializer.validated_data),
             supplied_version=supplied_version,
+            target_workspace=target_workspace,
         )
         return Response(ProjectSerializer(updated, context=_serializer_context(self)).data)
 
@@ -487,10 +514,13 @@ class BoardViewSet(viewsets.ReadOnlyModelViewSet[Board]):
                 raise ValidationError(
                     {"columnIds": "Die Liste muss sämtliche Boardspalten enthalten."}
                 )
-            mapping = {column.id: column for column in columns}
-            for position, column_id in enumerate(ids):
-                mapping[column_id].position = position
-            BoardColumn.objects.bulk_update(columns, ("position", "updated_at"))
+            intake = next(
+                (column for column in columns if column.system_role == "new-assigned"),
+                None,
+            )
+            if intake is not None and ids[0] != intake.id:
+                raise ConflictError("Verschieben der dynamischen Spalte nicht möglich.")
+            _reindex_board_columns(locked_board, ordered_ids=ids)
             increment_version(locked_board)
             locked_board.save(update_fields=("version", "updated_at"))
             _broadcast_board(
@@ -736,7 +766,6 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
             validated_data=dict(serializer.validated_data),
             supplied_version=supplied_version,
         )
-        updated = self.get_queryset().get(pk=updated.pk)
         return Response(TaskSerializer(updated, context=_serializer_context(self)).data)
 
     def destroy(self, request: Any, *args: Any, **kwargs: Any) -> Response:
