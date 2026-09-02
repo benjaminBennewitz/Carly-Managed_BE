@@ -6,6 +6,7 @@ from datetime import timedelta
 
 import pytest
 from django.core import mail
+from django.core.cache import cache
 from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -19,6 +20,12 @@ from apps.workspaces.models import Board, Workspace, WorkspaceMembership
 pytestmark = pytest.mark.django_db
 
 STRONG_PASSWORD = "Fokus!Board-2026-sicher"
+
+
+@pytest.fixture(autouse=True)
+def isolate_auth_throttle_cache() -> None:
+    """Isoliert DRF-Throttle-Zähler zwischen einzelnen Auth-Tests."""
+    cache.clear()
 
 
 def csrf_client() -> tuple[APIClient, str]:
