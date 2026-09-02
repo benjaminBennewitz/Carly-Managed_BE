@@ -1,0 +1,33 @@
+# deploy/systemd/carly-managed-api.service
+[Unit]
+Description=Carly Managed Django ASGI API
+After=network.target postgresql.service redis-server.service
+Wants=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=carly
+Group=carly
+WorkingDirectory=/srv/carly-managed/current
+Environment=DJANGO_ENV=production
+Environment=CARLY_ENV_FILE=/etc/carly-managed.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/srv/carly-managed/.venv/bin/daphne -b 127.0.0.1 -p 8201 config.asgi:application
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+ReadWritePaths=/srv/carly-managed/shared
+
+[Install]
+WantedBy=multi-user.target

@@ -3,6 +3,7 @@
 
 from typing import Any
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Max, Q
 from django.http import FileResponse
@@ -19,7 +20,12 @@ from rest_framework.views import APIView
 
 from apps.accounts.models import User
 from apps.common.exceptions import ConflictError
-from apps.common.throttles import SearchRateThrottle, UploadRateThrottle
+from apps.common.site_context import resolve_site_context
+from apps.common.throttles import (
+    InvitationRateThrottle,
+    SearchRateThrottle,
+    UploadRateThrottle,
+)
 from apps.common.validators import validate_upload
 from apps.preferences.rewards import award_carly_reward_safely
 from apps.workspaces.choices import BoardKind
@@ -1059,6 +1065,12 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
             )
             return Response(status=status.HTTP_204_NO_CONTENT)
 
+        if not settings.FILE_UPLOADS_ENABLED:
+            raise PermissionDenied(
+                "Datei-Uploads sind in der öffentlichen Demo deaktiviert.",
+                code="file_uploads_disabled",
+            )
+
         files = request.FILES.getlist("files")
         if not files or len(files) > 10:
             raise ValidationError({"files": "Lade ein bis zehn Dateien gleichzeitig hoch."})
@@ -1210,6 +1222,12 @@ class InvitationViewSet(
 
     queryset = WorkspaceInvitation.objects.none()
 
+    def get_throttles(self):
+        """Drosselt nur das Erzeugen ausgehender Einladungen."""
+        if self.action == "create":
+            return [InvitationRateThrottle()]
+        return super().get_throttles()
+
     def get_queryset(self):
         """Liefert gesendete Verwaltungs- oder persönliche empfangene Einladungen."""
         base = WorkspaceInvitation.objects.select_related(
@@ -1242,6 +1260,11 @@ class InvitationViewSet(
 
     def create(self, request: Any, *args: Any, **kwargs: Any) -> Response:
         """Erstellt eine Team- oder rein projektbezogene Einladung."""
+        if not settings.WORKSPACE_INVITATIONS_ENABLED:
+            raise PermissionDenied(
+                "Einladungen sind in der öffentlichen Demo deaktiviert.",
+                code="invitations_disabled",
+            )
         serializer = InvitationCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         project = serializer.validated_data.get("project")
@@ -1263,8 +1286,13 @@ class InvitationViewSet(
             require_workspace_manager(user=request.user, workspace=workspace)
         invitation_data = dict(serializer.validated_data)
         invitation_data["project"] = project
+        site_context = resolve_site_context(request)
         invitation, _ = create_invitation(
-            workspace=workspace, actor=request.user, **invitation_data
+            workspace=workspace,
+            actor=request.user,
+            frontend_url=site_context.frontend_url,
+            from_email=site_context.from_email,
+            **invitation_data,
         )
         return Response(InvitationSerializer(invitation).data, status=status.HTTP_201_CREATED)
 

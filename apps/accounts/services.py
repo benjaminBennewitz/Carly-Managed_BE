@@ -17,6 +17,7 @@ from django.utils import timezone
 from rest_framework.exceptions import AuthenticationFailed, ErrorDetail, ValidationError
 
 from apps.accounts.models import AccountToken, AccountTokenPurpose, User
+from apps.common.site_context import resolve_site_context
 
 logger = logging.getLogger(__name__)
 GENERIC_LOGIN_ERROR = "E-Mail-Adresse oder Passwort sind nicht korrekt."
@@ -193,14 +194,15 @@ def send_verification_email(*, user: User, request: HttpRequest) -> None:
     issued = issue_account_token(
         user=user, purpose=AccountTokenPurpose.VERIFY_EMAIL, request=request
     )
-    url = f"{settings.FRONTEND_URL}/auth/verify-email#token={issued.raw}"
+    site_context = resolve_site_context(request)
+    url = f"{site_context.frontend_url}/auth/verify-email#token={issued.raw}"
     send_mail(
         subject="E-Mail-Adresse für Carly Managed bestätigen",
         message=(
             "Bestätige deine E-Mail-Adresse über diesen Link:\n\n"
             f"{url}\n\nDer Link ist 24 Stunden gültig."
         ),
-        from_email=settings.DEFAULT_FROM_EMAIL,
+        from_email=site_context.from_email,
         recipient_list=[user.email],
         fail_silently=False,
     )
@@ -214,14 +216,15 @@ def request_password_reset(*, email: str, request: HttpRequest) -> None:
     issued = issue_account_token(
         user=user, purpose=AccountTokenPurpose.RESET_PASSWORD, request=request
     )
-    url = f"{settings.FRONTEND_URL}/auth/reset-password#token={issued.raw}"
+    site_context = resolve_site_context(request)
+    url = f"{site_context.frontend_url}/auth/reset-password#token={issued.raw}"
     send_mail(
         subject="Passwort für Carly Managed zurücksetzen",
         message=(
             "Setze dein Passwort über diesen Link zurück:\n\n"
             f"{url}\n\nDer Link ist eine Stunde gültig."
         ),
-        from_email=settings.DEFAULT_FROM_EMAIL,
+        from_email=site_context.from_email,
         recipient_list=[user.email],
         fail_silently=False,
     )

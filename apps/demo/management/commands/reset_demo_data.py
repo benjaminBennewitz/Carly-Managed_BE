@@ -29,12 +29,13 @@ class Command(BaseCommand):
             raise CommandError("Der Demo-Reset ist in dieser Umgebung nicht freigegeben.")
 
         email = str(options["owner_email"] or "").strip().lower()
-        staff_users = User.objects.filter(is_active=True, is_staff=True)
+        eligible_users = User.objects.filter(is_active=True)
         if email:
-            owner = staff_users.filter(email__iexact=email).first()
+            owner = eligible_users.filter(email__iexact=email).first()
             if owner is None:
-                raise CommandError("Das angegebene aktive Staff-Konto wurde nicht gefunden.")
+                raise CommandError("Das angegebene aktive Demo-Konto wurde nicht gefunden.")
         else:
+            staff_users = eligible_users.filter(is_staff=True)
             candidates = list(staff_users.order_by("date_joined")[:2])
             if len(candidates) != 1:
                 raise CommandError(

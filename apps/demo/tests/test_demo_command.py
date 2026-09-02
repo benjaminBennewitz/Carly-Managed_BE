@@ -52,3 +52,24 @@ class TestDemoResetCommand(TestCase):
         """Verhindert unbeabsichtigte Command-Ausführung ohne Freigabe."""
         with pytest.raises(CommandError, match="DEMO_DATA_RESET_ENABLED"):
             call_command("reset_demo_data")
+
+    @override_settings(
+        DEMO_OWNER_EMAIL="demo@carly-managed.de",
+        DEMO_LOGIN_PASSWORD="Boards!Preview2026",
+        DEMO_DISPLAY_NAME="Demo User",
+        DEMO_DATA_RESET_ENABLED=True,
+    )
+    def test_provision_demo_user_creates_verified_non_staff_account(self) -> None:
+        """Provisioniert den öffentlichen Zugang ohne Registrierungs- oder Adminrechte."""
+        output = StringIO()
+
+        call_command("provision_demo_user", stdout=output)
+
+        user = User.objects.get(email="demo@carly-managed.de")
+        assert user.check_password("Boards!Preview2026")
+        assert user.email_verified_at is not None
+        assert user.is_active
+        assert not user.is_staff
+        assert not user.is_superuser
+        assert Workspace.objects.filter(owner=user, name="Carly Managed Demo").exists()
+        assert "Demo-Konto angelegt" in output.getvalue()

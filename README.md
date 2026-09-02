@@ -38,7 +38,11 @@ python manage.py migrate
 python manage.py createsuperuser
 ```
 
-PostgreSQL und Memurai müssen separat laufen. Lokal lädt das Backend automatisch `.env.local` und `config.settings.development`.
+PostgreSQL und Memurai müssen separat laufen. Lokal verwendet das Backend automatisch `config.settings.development`. Eine `.env.local` ist optional; ohne sie wird ausschließlich für Development ein erkennbarer lokaler Fallback-Secret-Key verwendet. Für eigene lokale DB-/Redis-Werte kann `.env.local.example` nach `.env.local` kopiert und angepasst werden.
+
+```cmd
+copy .env.local.example .env.local
+```
 
 Daphne starten:
 

@@ -1468,6 +1468,8 @@ def create_invitation(
     actor: User,
     email: str,
     full_name: str = "",
+    frontend_url: str | None = None,
+    from_email: str | None = None,
 ) -> tuple[WorkspaceInvitation, str]:
     """Erzeugt eine Einladung und informiert bestehende Konten zusätzlich in-app."""
     if project is None and not workspace.allow_invites and actor.id != workspace.owner_id:
@@ -1540,7 +1542,8 @@ def create_invitation(
         )
 
     if existing_user is None:
-        url = f"{settings.FRONTEND_URL}/invite#token={raw_token}"
+        public_frontend_url = (frontend_url or settings.FRONTEND_URL).rstrip("/")
+        url = f"{public_frontend_url}/invite#token={raw_token}"
         send_mail(
             subject=f"Einladung zu {project.name if project else workspace.name}",
             message=(
@@ -1548,7 +1551,7 @@ def create_invitation(
                 f"E-Mail-Adresse und öffne anschließend diesen Link:\n\n{url}\n\n"
                 "Der Link ist sieben Tage gültig."
             ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
+            from_email=from_email or settings.DEFAULT_FROM_EMAIL,
             recipient_list=[normalized_email],
             fail_silently=False,
         )

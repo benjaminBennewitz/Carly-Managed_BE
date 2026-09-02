@@ -6,21 +6,25 @@ from rest_framework.permissions import BasePermission
 
 
 def can_reset_demo_data(user) -> bool:
-    """Erlaubt lokale Test-Resets und schützt produktive Umgebungen administrativ."""
+    """Erlaubt lokale Resets und produktiv ausschließlich das Demo-Konto."""
     if not user or not user.is_authenticated:
         return False
     if not settings.DEMO_DATA_RESET_ENABLED:
         return False
     if settings.DEBUG:
         return True
-    return bool(settings.DEMO_DATA_RESET_ALLOW_PRODUCTION and user.is_staff)
+    return bool(
+        settings.DEMO_DATA_RESET_ALLOW_PRODUCTION
+        and settings.DEMO_OWNER_EMAIL
+        and user.email.strip().lower() == settings.DEMO_OWNER_EMAIL
+    )
 
 
 class CanResetDemoData(BasePermission):
-    """Erlaubt den Reset lokal für Testkonten und produktiv nur für Staff."""
+    """Erlaubt den Reset lokal frei und produktiv nur für das definierte Demo-Konto."""
 
     message = "Der Testdaten-Reset ist in dieser Umgebung nicht verfügbar."
 
     def has_permission(self, request, view) -> bool:
-        """Prüft Feature-Flag, Umgebung und erforderliche Berechtigung."""
+        """Prüft Feature-Flag, Umgebung und Demo-Konto."""
         return can_reset_demo_data(request.user)

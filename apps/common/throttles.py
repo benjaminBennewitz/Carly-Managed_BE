@@ -45,3 +45,9 @@ class SearchRateThrottle(UserRateThrottle):
     """Schützt die globale Suche vor unnötiger Last."""
 
     scope = "search"
+
+
+class InvitationRateThrottle(UserRateThrottle):
+    """Begrenzt ausgehende Einladungs-E-Mails je angemeldetem Nutzer."""
+
+    scope = "invitations"

@@ -1,0 +1,33 @@
+# deploy/systemd/carly-managed-beat.service
+[Unit]
+Description=Carly Managed Celery Beat
+After=network.target redis-server.service
+Wants=redis-server.service
+
+[Service]
+Type=simple
+User=carly
+Group=carly
+WorkingDirectory=/srv/carly-managed/current
+Environment=DJANGO_ENV=production
+Environment=CARLY_ENV_FILE=/etc/carly-managed.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/srv/carly-managed/.venv/bin/celery -A config.celery:app beat --loglevel=INFO --schedule=/srv/carly-managed/shared/celery/celerybeat-schedule --pidfile=/srv/carly-managed/shared/celery/celerybeat.pid
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+ReadWritePaths=/srv/carly-managed/shared
+
+[Install]
+WantedBy=multi-user.target

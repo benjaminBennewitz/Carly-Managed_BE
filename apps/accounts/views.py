@@ -1,6 +1,7 @@
 # apps/accounts/views.py
 """Stellt sichere, klar begrenzte Kontoendpunkte bereit."""
 
+from django.conf import settings
 from django.contrib.auth import update_session_auth_hash
 from django.db import transaction
 from django.middleware.csrf import get_token
@@ -10,7 +11,7 @@ from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import permissions, status
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import AuthenticationFailed, PermissionDenied, ValidationError
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -67,6 +68,11 @@ class RegisterView(APIView):
     @extend_schema(request=RegistrationSerializer, responses={201: CurrentUserSerializer})
     def post(self, request: Request) -> Response:
         """Validiert und persistiert eine Registrierung atomar."""
+        if not settings.PUBLIC_REGISTRATION_ENABLED:
+            raise PermissionDenied(
+                "Die Registrierung ist in der öffentlichen Demo deaktiviert.",
+                code="registration_disabled",
+            )
         serializer = RegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = register_user(
@@ -95,6 +101,13 @@ class LoginView(APIView):
         """Startet bei gültigen Zugangsdaten eine Sitzung."""
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        if settings.PUBLIC_DEMO_MODE:
+            requested_email = serializer.validated_data["email"].strip().lower()
+            if requested_email != settings.DEMO_OWNER_EMAIL:
+                raise AuthenticationFailed(
+                    "E-Mail-Adresse oder Passwort sind ungültig.",
+                    code="invalid_credentials",
+                )
         user = authenticate_user(
             request=request,
             email=serializer.validated_data["email"],
@@ -127,6 +140,11 @@ class MeView(APIView):
     @extend_schema(request=CurrentUserSerializer, responses={200: CurrentUserSerializer})
     def patch(self, request: Request) -> Response:
         """Aktualisiert ausschließlich freigegebene Profildaten."""
+        if settings.PUBLIC_DEMO_MODE:
+            raise PermissionDenied(
+                "Das Demo-Konto kann nicht verändert werden.",
+                code="demo_account_locked",
+            )
         serializer = CurrentUserSerializer(
             request.user,
             data=request.data,
@@ -144,10 +162,15 @@ class PasswordChangeView(APIView):
     @extend_schema(request=PasswordChangeSerializer, responses={204: None})
     def post(self, request: Request) -> Response:
         """Setzt ein neues Passwort und erhält nur die aktuelle Sitzung."""
+        if settings.PUBLIC_DEMO_MODE:
+            raise PermissionDenied(
+                "Das Passwort des Demo-Kontos kann nicht verändert werden.",
+                code="demo_account_locked",
+            )
         serializer = PasswordChangeSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         if not request.user.check_password(serializer.validated_data["currentPassword"]):
-            from rest_framework.exceptions import ValidationError
+            from rest_framework.exceptions import AuthenticationFailed, PermissionDenied, ValidationError
 
             raise ValidationError(
                 {"currentPassword": ["Das aktuelle Passwort ist nicht korrekt."]},
@@ -172,6 +195,11 @@ class VerificationRequestView(APIView):
     @extend_schema(request=None, responses={204: None})
     def post(self, request: Request) -> Response:
         """Versendet nur bei noch nicht bestätigter Adresse eine Nachricht."""
+        if settings.PUBLIC_DEMO_MODE:
+            raise PermissionDenied(
+                "Das Demo-Konto benötigt keine neue Verifizierungsnachricht.",
+                code="demo_account_locked",
+            )
         if not request.user.email_verified:
             send_verification_email(user=request.user, request=request)
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -188,6 +216,11 @@ class VerificationConfirmView(APIView):
     @extend_schema(request=TokenSerializer, responses={200: CurrentUserSerializer})
     def post(self, request: Request) -> Response:
         """Markiert die Adresse nach erfolgreichem Tokenverbrauch als bestätigt."""
+        if settings.PUBLIC_DEMO_MODE:
+            raise PermissionDenied(
+                "Die E-Mail-Verifizierung ist in der öffentlichen Demo deaktiviert.",
+                code="email_verification_disabled",
+            )
         serializer = TokenSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         token = consume_account_token(
@@ -212,6 +245,11 @@ class PasswordResetRequestView(APIView):
     @extend_schema(request=EmailOnlySerializer, responses={200: OpenApiTypes.OBJECT})
     def post(self, request: Request) -> Response:
         """Antwortet unabhängig vom Kontobestand identisch."""
+        if not settings.PASSWORD_RESET_ENABLED:
+            raise PermissionDenied(
+                "Der Passwort-Reset ist in der öffentlichen Demo deaktiviert.",
+                code="password_reset_disabled",
+            )
         serializer = EmailOnlySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         request_password_reset(email=serializer.validated_data["email"], request=request)
@@ -231,6 +269,11 @@ class PasswordResetValidateView(APIView):
     @extend_schema(request=TokenSerializer, responses={200: OpenApiTypes.OBJECT})
     def post(self, request: Request) -> Response:
         """Bestätigt ausschließlich die aktuelle Nutzbarkeit des Reset-Tokens."""
+        if not settings.PASSWORD_RESET_ENABLED:
+            raise PermissionDenied(
+                "Der Passwort-Reset ist in der öffentlichen Demo deaktiviert.",
+                code="password_reset_disabled",
+            )
         serializer = TokenSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         validate_account_token(
@@ -251,6 +294,11 @@ class PasswordResetConfirmView(APIView):
     @extend_schema(request=PasswordResetConfirmSerializer, responses={204: None})
     def post(self, request: Request) -> Response:
         """Ändert das Passwort und hebt bestehende Sperren auf."""
+        if not settings.PASSWORD_RESET_ENABLED:
+            raise PermissionDenied(
+                "Der Passwort-Reset ist in der öffentlichen Demo deaktiviert.",
+                code="password_reset_disabled",
+            )
         serializer = PasswordResetConfirmSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         raw_token = serializer.validated_data["token"]

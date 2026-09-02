@@ -40,6 +40,13 @@ env = environ.Env(
     EMAIL_TIMEOUT=(int, 10),
     DEMO_DATA_RESET_ENABLED=(bool, False),
     DEMO_DATA_RESET_ALLOW_PRODUCTION=(bool, False),
+    DEMO_AUTO_RESET_ENABLED=(bool, False),
+    DEMO_AUTO_RESET_HOUR=(int, 2),
+    PUBLIC_DEMO_MODE=(bool, False),
+    PUBLIC_REGISTRATION_ENABLED=(bool, True),
+    PASSWORD_RESET_ENABLED=(bool, True),
+    WORKSPACE_INVITATIONS_ENABLED=(bool, True),
+    FILE_UPLOADS_ENABLED=(bool, True),
 )
 
 
@@ -85,7 +92,24 @@ def _redis_url(database_number: int, explicit_variable: str) -> str:
     return f"{scheme}://{authority}/{database_number}"
 
 
-SECRET_KEY = env("DJANGO_SECRET_KEY")
+def _host_value_mapping(raw_value: str) -> dict[str, str]:
+    """Parst eine semikolongetrennte Host-Wert-Zuordnung aus der Umgebung."""
+    mapping: dict[str, str] = {}
+    for entry in raw_value.split(";"):
+        normalized_entry = entry.strip()
+        if not normalized_entry:
+            continue
+        host, separator, value = normalized_entry.partition("=")
+        if not separator or not host.strip() or not value.strip():
+            continue
+        mapping[host.strip().lower()] = value.strip()
+    return mapping
+
+
+SECRET_KEY = env(
+    "DJANGO_SECRET_KEY",
+    default="django-insecure-carly-managed-local-development-only",
+)
 DEBUG = env("DJANGO_DEBUG")
 ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 
@@ -173,10 +197,15 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "/static/"
-STATIC_ROOT = BASE_DIR / "staticfiles"
-STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+STATIC_ROOT = Path(env("STATIC_ROOT", default=str(BASE_DIR / "staticfiles"))).expanduser()
 MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_ROOT = Path(env("MEDIA_ROOT", default=str(BASE_DIR / "media"))).expanduser()
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"
+    },
+}
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -224,8 +253,14 @@ LOGIN_FAILURE_LIMIT = env("LOGIN_FAILURE_LIMIT")
 LOGIN_LOCK_MINUTES = env("LOGIN_LOCK_MINUTES")
 TRUST_X_FORWARDED_FOR = env("TRUST_X_FORWARDED_FOR")
 TRUSTED_PROXY_IPS = set(env.list("TRUSTED_PROXY_IPS", default=[]))
-FRONTEND_URL = env("DJANGO_FRONTEND_URL", default="http://localhost:4555")
+FRONTEND_URL = env("DJANGO_FRONTEND_URL", default="http://localhost:4555").rstrip("/")
+FRONTEND_URLS = [
+    value.rstrip("/")
+    for value in env.list("DJANGO_FRONTEND_URLS", default=[FRONTEND_URL])
+    if value.strip()
+]
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Carly Managed <noreply@localhost>")
+EMAIL_FROM_BY_HOST = _host_value_mapping(env("DJANGO_EMAIL_FROM_BY_HOST", default=""))
 EMAIL_BACKEND = env(
     "EMAIL_BACKEND",
     default="django.core.mail.backends.console.EmailBackend",
@@ -240,7 +275,16 @@ EMAIL_TIMEOUT = env.int("EMAIL_TIMEOUT")
 
 DEMO_DATA_RESET_ENABLED = env.bool("DEMO_DATA_RESET_ENABLED")
 DEMO_DATA_RESET_ALLOW_PRODUCTION = env.bool("DEMO_DATA_RESET_ALLOW_PRODUCTION")
+DEMO_AUTO_RESET_ENABLED = env.bool("DEMO_AUTO_RESET_ENABLED")
+DEMO_AUTO_RESET_HOUR = env.int("DEMO_AUTO_RESET_HOUR")
+PUBLIC_DEMO_MODE = env.bool("PUBLIC_DEMO_MODE")
+PUBLIC_REGISTRATION_ENABLED = env.bool("PUBLIC_REGISTRATION_ENABLED")
+PASSWORD_RESET_ENABLED = env.bool("PASSWORD_RESET_ENABLED")
+WORKSPACE_INVITATIONS_ENABLED = env.bool("WORKSPACE_INVITATIONS_ENABLED")
+FILE_UPLOADS_ENABLED = env.bool("FILE_UPLOADS_ENABLED")
 DEMO_OWNER_EMAIL = env("DEMO_OWNER_EMAIL", default="").strip().lower()
+DEMO_LOGIN_PASSWORD = env("DEMO_LOGIN_PASSWORD", default="")
+DEMO_DISPLAY_NAME = env("DEMO_DISPLAY_NAME", default="Demo User").strip() or "Demo User"
 DEMO_WORKSPACE_NAME = env("DEMO_WORKSPACE_NAME", default="Carly Managed Demo").strip()
 
 REST_FRAMEWORK = {
@@ -270,6 +314,7 @@ REST_FRAMEWORK = {
         "auth_verify": "10/hour",
         "uploads": "30/hour",
         "search": "60/min",
+        "invitations": "10/hour",
         "demo_reset": "2/min",
     },
 }
@@ -342,6 +387,10 @@ CELERY_BEAT_SCHEDULE = {
     "refresh-carly-streaks": {
         "task": "apps.preferences.tasks.refresh_carly_streaks",
         "schedule": crontab(minute=10, hour=0),
+    },
+    "reset-public-demo-data": {
+        "task": "apps.demo.tasks.reset_public_demo_data",
+        "schedule": crontab(minute=0, hour=DEMO_AUTO_RESET_HOUR),
     },
 }
 

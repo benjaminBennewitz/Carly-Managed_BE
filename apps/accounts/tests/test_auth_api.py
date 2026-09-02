@@ -90,6 +90,51 @@ def test_registration_bootstraps_complete_personal_context() -> None:
     assert "/auth/verify-email?token=" not in mail.outbox[0].body
 
 
+
+@override_settings(
+    ALLOWED_HOSTS=["cases.b2folio.de", "cases.design-code-repeat.de"],
+    FRONTEND_URL="https://cases.b2folio.de",
+    FRONTEND_URLS=[
+        "https://cases.b2folio.de",
+        "https://cases.design-code-repeat.de",
+    ],
+    EMAIL_FROM_BY_HOST={
+        "cases.b2folio.de": "Carly Managed <kontakt@b2folio.de>",
+        "cases.design-code-repeat.de": (
+            "Carly Managed <kontakt@design-code-repeat.de>"
+        ),
+    },
+)
+def test_registration_email_keeps_request_host_identity() -> None:
+    """Verhindert Cross-Brand-Links zwischen den beiden Case-Study-Domains."""
+    client = APIClient(enforce_csrf_checks=True)
+    csrf_response = client.get(
+        reverse("csrf"),
+        secure=True,
+        HTTP_HOST="cases.design-code-repeat.de",
+    )
+    assert csrf_response.status_code == 200
+
+    response = client.post(
+        reverse("register"),
+        {
+            "displayName": "DCR Besucher",
+            "email": "dcr-host@example.test",
+            "password": STRONG_PASSWORD,
+            "privacyAcknowledged": True,
+        },
+        format="json",
+        secure=True,
+        HTTP_HOST="cases.design-code-repeat.de",
+        HTTP_X_CSRFTOKEN=csrf_response.data["csrfToken"],
+    )
+
+    assert response.status_code == 201
+    assert len(mail.outbox) == 1
+    assert mail.outbox[0].from_email == "Carly Managed <kontakt@design-code-repeat.de>"
+    assert "https://cases.design-code-repeat.de/auth/verify-email#token=" in mail.outbox[0].body
+    assert "cases.b2folio.de" not in mail.outbox[0].body
+
 def test_registration_rejects_missing_privacy_acknowledgement() -> None:
     """Vertraut bei der Datenschutzzustimmung nicht auf das Frontend."""
     client, token = csrf_client()
@@ -360,3 +405,65 @@ def test_password_change_rejects_same_password_and_revokes_open_reset_tokens() -
     pending.refresh_from_db()
     assert user.check_password(new_password)
     assert pending.used_at is not None
+
+@override_settings(PUBLIC_REGISTRATION_ENABLED=False)
+def test_public_demo_can_disable_registration() -> None:
+    """Verhindert produktiv neue Konten auch bei direktem API-Aufruf."""
+    client, token = csrf_client()
+    response = register(client, token, email="blocked@example.test")
+
+    assert response.status_code == 403
+    assert response.data["code"] == "registration_disabled"
+    assert not User.objects.filter(email="blocked@example.test").exists()
+
+
+@override_settings(PASSWORD_RESET_ENABLED=False)
+def test_public_demo_can_disable_password_reset() -> None:
+    """Versendet bei deaktiviertem Recovery-Flow keine Reset-Nachrichten."""
+    client, token = csrf_client()
+    response = client.post(
+        reverse("password-reset-request"),
+        {"email": "demo@example.test"},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+
+    assert response.status_code == 403
+    assert response.data["code"] == "password_reset_disabled"
+    assert len(mail.outbox) == 0
+
+
+@override_settings(PUBLIC_DEMO_MODE=True, DEMO_OWNER_EMAIL="demo@carly-managed.de")
+def test_public_demo_login_accepts_only_configured_demo_account() -> None:
+    """Blockiert in Production-Demo selbst gültige Zugangsdaten anderer Konten."""
+    demo = User.objects.create_user(
+        email="demo@carly-managed.de",
+        password=STRONG_PASSWORD,
+        display_name="Demo User",
+        privacy_acknowledged_at=timezone.now(),
+        email_verified_at=timezone.now(),
+    )
+    other = User.objects.create_user(
+        email="other@example.test",
+        password=STRONG_PASSWORD,
+        display_name="Andere Person",
+        privacy_acknowledged_at=timezone.now(),
+    )
+    client, token = csrf_client()
+
+    blocked = client.post(
+        reverse("login"),
+        {"email": other.email, "password": STRONG_PASSWORD, "rememberMe": False},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+    allowed = client.post(
+        reverse("login"),
+        {"email": demo.email, "password": STRONG_PASSWORD, "rememberMe": False},
+        format="json",
+        HTTP_X_CSRFTOKEN=token,
+    )
+
+    assert blocked.status_code == 403
+    assert allowed.status_code == 200
+    assert allowed.data["user"]["email"] == demo.email

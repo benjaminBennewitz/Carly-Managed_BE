@@ -844,3 +844,24 @@ def reset_demo_workspace(*, owner: User) -> DemoResetResult:
         members=workspace.memberships.filter(is_active=True).count(),
         notifications=workspace.system_notifications.count(),
     )
+
+@transaction.atomic
+def reset_public_demo_account(*, owner: User) -> DemoResetResult:
+    """Bereinigt öffentliche Demo-Mutationen und stellt den definierten Ausgangsstand wieder her.
+
+    Der globale persönliche Workspace bleibt als technischer Anker erhalten. Alle zusätzlich
+    angelegten Team-Workspaces, Projekte und persönlichen Tasks des Demo-Kontos werden entfernt,
+    bevor die deterministischen Demo-Daten neu erzeugt werden.
+    """
+    from apps.workspaces.choices import BoardKind
+    from apps.workspaces.models import Project, Task
+    from apps.workspaces.services import ensure_personal_board
+
+    personal_board = ensure_personal_board(user=owner)
+    personal_workspace_id = personal_board.workspace_id
+
+    Workspace.objects.filter(owner=owner).exclude(pk=personal_workspace_id).delete()
+    Project.objects.filter(workspace_id=personal_workspace_id).delete()
+    Task.objects.filter(board=personal_board).delete()
+
+    return reset_demo_workspace(owner=owner)
