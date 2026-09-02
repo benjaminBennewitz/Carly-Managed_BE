@@ -65,6 +65,12 @@ class RegisterView(APIView):
     permission_classes = [permissions.AllowAny]
     throttle_classes = [RegistrationRateThrottle]
 
+    def get_throttles(self) -> list:
+        """Umgeht Registrierungs-Throttling, wenn die Funktion vollständig gesperrt ist."""
+        if not settings.PUBLIC_REGISTRATION_ENABLED:
+            return []
+        return super().get_throttles()
+
     @extend_schema(request=RegistrationSerializer, responses={201: CurrentUserSerializer})
     def post(self, request: Request) -> Response:
         """Validiert und persistiert eine Registrierung atomar."""

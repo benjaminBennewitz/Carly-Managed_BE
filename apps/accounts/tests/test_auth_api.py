@@ -126,6 +126,7 @@ def test_registration_email_keeps_request_host_identity() -> None:
         format="json",
         secure=True,
         HTTP_HOST="cases.design-code-repeat.de",
+        HTTP_REFERER="https://cases.design-code-repeat.de/",
         HTTP_X_CSRFTOKEN=csrf_response.data["csrfToken"],
     )
 
