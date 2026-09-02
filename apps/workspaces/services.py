@@ -64,9 +64,7 @@ def _next_position(model: type, **filters: Any) -> int:
     return 0 if maximum is None else maximum + 1
 
 
-def _ensure_project_access_for_users(
-    *, project: Project | None, users: list[User | None]
-) -> None:
+def _ensure_project_access_for_users(*, project: Project | None, users: list[User | None]) -> None:
     """Macht echte Zuweisungen zu einer dauerhaften Projektfreigabe."""
     if project is None:
         return
@@ -183,9 +181,7 @@ def _dynamic_new_columns_enabled(user: User) -> bool:
     from apps.preferences.models import UserSettings
 
     value = (
-        UserSettings.objects.filter(user=user)
-        .values_list("dynamic_new_columns", flat=True)
-        .first()
+        UserSettings.objects.filter(user=user).values_list("dynamic_new_columns", flat=True).first()
     )
     return True if value is None else bool(value)
 
@@ -369,9 +365,7 @@ def update_project(
 ) -> Project:
     """Aktualisiert Projektfelder, Rollen und optional den Teamkontext."""
     locked = (
-        Project.objects.select_for_update(of=("self",))
-        .select_related("board")
-        .get(pk=project.pk)
+        Project.objects.select_for_update(of=("self",)).select_related("board").get(pk=project.pk)
     )
     assert_version(locked, supplied_version)
     previous_workspace = locked.workspace
@@ -386,9 +380,7 @@ def update_project(
         ).values_list("user_id", flat=True)
     )
     previous_recipient_ids.add(locked.owner_id)
-    previous_participant_ids = set(
-        locked.participants.values_list("user_id", flat=True)
-    )
+    previous_participant_ids = set(locked.participants.values_list("user_id", flat=True))
     previous_recipient_ids.update(previous_participant_ids)
     if previous_visibility == ProjectVisibility.WORKSPACE:
         previous_recipient_ids.update(
@@ -440,9 +432,7 @@ def update_project(
         board_update_fields.append("title")
     if board_update_fields:
         increment_version(locked.board)
-        locked.board.save(
-            update_fields=(*board_update_fields, "version", "updated_at")
-        )
+        locked.board.save(update_fields=(*board_update_fields, "version", "updated_at"))
     increment_version(locked)
     locked.full_clean()
     locked.save()
@@ -523,9 +513,7 @@ def update_project(
             ProjectParticipant.objects.update_or_create(
                 project=locked, user_id=user_id, defaults={"role": role}
             )
-        cleanup_unused_project_guests(
-            workspace=locked.workspace, user_ids=removed_participant_ids
-        )
+        cleanup_unused_project_guests(workspace=locked.workspace, user_ids=removed_participant_ids)
     if is_pinned is not None:
         ProjectPreference.objects.update_or_create(
             project=locked, user=actor, defaults={"is_pinned": is_pinned}
@@ -543,9 +531,7 @@ def update_project(
         ).values_list("user_id", flat=True)
     )
     current_recipient_ids.add(locked.owner_id)
-    current_recipient_ids.update(
-        locked.participants.values_list("user_id", flat=True)
-    )
+    current_recipient_ids.update(locked.participants.values_list("user_id", flat=True))
     if locked.visibility == ProjectVisibility.WORKSPACE:
         current_recipient_ids.update(
             WorkspaceMembership.objects.filter(
@@ -590,9 +576,7 @@ def set_project_status(
 ) -> Project:
     """Ändert Abschluss oder Archivierung eines Projekts konsistent."""
     locked = (
-        Project.objects.select_for_update(of=("self",))
-        .select_related("board")
-        .get(pk=project.pk)
+        Project.objects.select_for_update(of=("self",)).select_related("board").get(pk=project.pk)
     )
     assert_version(locked, supplied_version)
     now = timezone.now()
@@ -758,9 +742,7 @@ def create_task(
             )
         else:
             validated_data["assignee"] = board.owner
-            validated_data["column"] = _ensure_personal_intake_column(
-                board=board, user=board.owner
-            )
+            validated_data["column"] = _ensure_personal_intake_column(board=board, user=board.owner)
     elif validated_data.get("is_shared_pool"):
         validated_data["column"] = None
     elif validated_data.get("column") is None:
@@ -876,9 +858,7 @@ def update_task(
         locked.is_shared_pool = False
         locked.requires_review = False
         locked.review_hint = ""
-        locked.position = _next_position(
-            Task, column=intake_column, archived_at__isnull=True
-        )
+        locked.position = _next_position(Task, column=intake_column, archived_at__isnull=True)
         validated_data.pop("assignee", None)
         validated_data.pop("is_shared_pool", None)
         target_column = None
@@ -898,9 +878,7 @@ def update_task(
             )
         elif target_column is not None and target_column.id != locked.column_id:
             locked.column = target_column
-            locked.position = _next_position(
-                Task, column=target_column, archived_at__isnull=True
-            )
+            locked.position = _next_position(Task, column=target_column, archived_at__isnull=True)
 
     increment_version(locked)
     locked.full_clean()
@@ -914,13 +892,9 @@ def update_task(
     _sync_assignment_mirror(locked)
     add_history(task=locked, actor=actor, action="Task aktualisiert", icon="edit_note")
     if old_assignee_id != locked.assignee_id:
-        execute_automation_rules(
-            task=locked, trigger=AutomationTrigger.TASK_ASSIGNED, actor=actor
-        )
+        execute_automation_rules(task=locked, trigger=AutomationTrigger.TASK_ASSIGNED, actor=actor)
     if target_column is not None:
-        execute_automation_rules(
-            task=locked, trigger=AutomationTrigger.COLUMN_ENTERED, actor=actor
-        )
+        execute_automation_rules(task=locked, trigger=AutomationTrigger.COLUMN_ENTERED, actor=actor)
     if old_board_id != locked.board_id:
         _broadcast_board(old_board_id, "task.deleted", {"taskId": str(locked.id)})
         _broadcast_board(
@@ -1503,9 +1477,7 @@ def create_invitation(
         email__iexact=normalized_email,
         status=InvitationStatus.PENDING,
     )
-    pending.filter(expires_at__lte=now).update(
-        status=InvitationStatus.EXPIRED, updated_at=now
-    )
+    pending.filter(expires_at__lte=now).update(status=InvitationStatus.EXPIRED, updated_at=now)
     if pending.filter(expires_at__gt=now).exists():
         raise ConflictError("Für diese E-Mail-Adresse besteht bereits eine offene Einladung.")
     raw_token = secrets.token_urlsafe(48)

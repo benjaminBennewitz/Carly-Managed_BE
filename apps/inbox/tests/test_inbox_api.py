@@ -138,6 +138,7 @@ def test_inbox_lists_can_be_limited_to_active_workspace() -> None:
     data = response.data["results"] if isinstance(response.data, dict) else response.data
     assert [item["title"] for item in data] == ["Team"]
 
+
 def test_project_guest_chat_stays_inside_shared_project_context() -> None:
     """Erlaubt Projektgästen Chats nur mit Personen aus demselben Projekt."""
     owner = create_user("owner-guest-chat@example.test", "Owner Guest Chat")
@@ -194,4 +195,3 @@ def test_project_guest_chat_stays_inside_shared_project_context() -> None:
         format="json",
     )
     assert rejected.status_code == 400
-

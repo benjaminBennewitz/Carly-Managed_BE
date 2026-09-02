@@ -208,17 +208,13 @@ class BoardConsumer(AsyncJsonWebsocketConsumer):
             .first()
         )
         return (
-            WorkspaceMemberSerializer(
-                membership, context={"online_user_ids": {user_id}}
-            ).data
+            WorkspaceMemberSerializer(membership, context={"online_user_ids": {user_id}}).data
             if membership
             else None
         )
 
     @database_sync_to_async
-    def _presence_join(
-        self, user_id: str
-    ) -> tuple[bool, list[str], list[dict[str, Any]]]:
+    def _presence_join(self, user_id: str) -> tuple[bool, list[str], list[dict[str, Any]]]:
         """Registriert eine Verbindung und liefert Presence samt aktiver Bearbeitungen."""
         key = f"board-presence:{self.board_id}"
         now = time.time()

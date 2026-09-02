@@ -281,24 +281,18 @@ def perform_carly_action(
         if food == "potion":
             carly.energy = 100
             carly.last_energy_decay_at = now
-            carly.aura_until = now + timedelta(
-                seconds=int(food_rule["visualDurationSeconds"])
-            )
+            carly.aura_until = now + timedelta(seconds=int(food_rule["visualDurationSeconds"]))
         else:
             carly.energy = min(100, carly.energy + int(food_rule["energy"]))
         if food == "fish":
-            carly.moon_until = now + timedelta(
-                seconds=int(food_rule["bonusDurationSeconds"])
-            )
+            carly.moon_until = now + timedelta(seconds=int(food_rule["bonusDurationSeconds"]))
         elif food == "berry":
             carly.berry_focus_until = now + timedelta(
                 seconds=int(food_rule["bonusDurationSeconds"])
             )
             carly.berry_focus_charges = 1
         elif food == "cookie":
-            carly.cookie_until = now + timedelta(
-                seconds=int(food_rule["bonusDurationSeconds"])
-            )
+            carly.cookie_until = now + timedelta(seconds=int(food_rule["bonusDurationSeconds"]))
         special_effect = str(food_rule["effect"])
         carly.last_message = f"{food_rule['label']} - eine akzeptable Wahl."
     else:

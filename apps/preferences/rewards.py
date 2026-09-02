@@ -373,9 +373,7 @@ def award_carly_reward(
     base_credits = int(rule["credits"] if credits is None else credits)
     multiplier = _event_multiplier(user, event_type, int((rule or {}).get("fullUntil", 5)))
     xp_today, credits_today = _daily_totals(user)
-    xp_daily_multiplier = _daily_soft_multiplier(
-        xp_today, DAILY_XP_SOFT_CAP, DAILY_XP_HARD_CAP
-    )
+    xp_daily_multiplier = _daily_soft_multiplier(xp_today, DAILY_XP_SOFT_CAP, DAILY_XP_HARD_CAP)
     credit_daily_multiplier = _daily_soft_multiplier(
         credits_today, DAILY_CREDIT_SOFT_CAP, DAILY_CREDIT_HARD_CAP
     )

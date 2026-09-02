@@ -90,8 +90,7 @@ def pool_tasks_for_user(user: User) -> QuerySet[Task]:
     project_ids = projects_for_user(user).values("id")
     return (
         Task.objects.filter(
-            Q(project_id__in=project_ids)
-            | Q(project__isnull=True, workspace_id__in=workspace_ids),
+            Q(project_id__in=project_ids) | Q(project__isnull=True, workspace_id__in=workspace_ids),
             is_shared_pool=True,
             assignee__isnull=True,
             archived_at__isnull=True,

@@ -97,7 +97,6 @@ def test_registration_bootstraps_complete_personal_context() -> None:
     assert "/auth/verify-email?token=" not in mail.outbox[0].body
 
 
-
 @override_settings(
     ALLOWED_HOSTS=["cases.b2folio.de", "cases.design-code-repeat.de"],
     FRONTEND_URL="https://cases.b2folio.de",
@@ -107,9 +106,7 @@ def test_registration_bootstraps_complete_personal_context() -> None:
     ],
     EMAIL_FROM_BY_HOST={
         "cases.b2folio.de": "Carly Managed <kontakt@b2folio.de>",
-        "cases.design-code-repeat.de": (
-            "Carly Managed <kontakt@design-code-repeat.de>"
-        ),
+        "cases.design-code-repeat.de": ("Carly Managed <kontakt@design-code-repeat.de>"),
     },
 )
 def test_registration_email_keeps_request_host_identity() -> None:
@@ -142,6 +139,7 @@ def test_registration_email_keeps_request_host_identity() -> None:
     assert mail.outbox[0].from_email == "Carly Managed <kontakt@design-code-repeat.de>"
     assert "https://cases.design-code-repeat.de/auth/verify-email#token=" in mail.outbox[0].body
     assert "cases.b2folio.de" not in mail.outbox[0].body
+
 
 def test_registration_rejects_missing_privacy_acknowledgement() -> None:
     """Vertraut bei der Datenschutzzustimmung nicht auf das Frontend."""
@@ -413,6 +411,7 @@ def test_password_change_rejects_same_password_and_revokes_open_reset_tokens() -
     pending.refresh_from_db()
     assert user.check_password(new_password)
     assert pending.used_at is not None
+
 
 @override_settings(PUBLIC_REGISTRATION_ENABLED=False)
 def test_public_demo_can_disable_registration() -> None:

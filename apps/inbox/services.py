@@ -23,9 +23,7 @@ def users_share_project_context(*, workspace: Workspace, users: Iterable[User]) 
     projects = Project.objects.filter(workspace=workspace).prefetch_related("participants")
     for project in projects:
         project_user_ids = {project.owner_id}
-        project_user_ids.update(
-            participant.user_id for participant in project.participants.all()
-        )
+        project_user_ids.update(participant.user_id for participant in project.participants.all())
         if user_ids.issubset(project_user_ids):
             return True
     return False
@@ -156,11 +154,15 @@ def send_message(
             "version": conversation.version,
         },
     )
-    repeated_recently = ChatMessage.objects.filter(
-        sender=sender,
-        body=body,
-        created_at__gte=timezone.now() - timedelta(minutes=2),
-    ).exclude(pk=message.pk).exists()
+    repeated_recently = (
+        ChatMessage.objects.filter(
+            sender=sender,
+            body=body,
+            created_at__gte=timezone.now() - timedelta(minutes=2),
+        )
+        .exclude(pk=message.pk)
+        .exists()
+    )
     if not repeated_recently:
         award_carly_reward_safely(
             user=sender,

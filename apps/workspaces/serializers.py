@@ -591,9 +591,7 @@ class BoardColumnSerializer(serializers.ModelSerializer[BoardColumn]):
     def get_tasks(self, obj: BoardColumn) -> list[dict[str, Any]]:
         """Liefert nicht archivierte Tasks in gespeicherter Reihenfolge."""
         tasks = [
-            task
-            for task in obj.tasks.all()
-            if task.archived_at is None and not task.is_shared_pool
+            task for task in obj.tasks.all() if task.archived_at is None and not task.is_shared_pool
         ]
         return TaskSerializer(tasks, many=True, context=self.context).data
 
@@ -859,8 +857,6 @@ class WorkspaceSerializer(serializers.ModelSerializer[Workspace]):
             return None
         membership = obj.memberships.filter(user=request.user, is_active=True).first()
         return membership.role if membership else None
-
-
 
 
 class WorkspaceWriteSerializer(serializers.ModelSerializer[Workspace]):

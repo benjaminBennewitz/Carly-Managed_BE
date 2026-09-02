@@ -87,10 +87,7 @@ class ConversationViewSet(viewsets.ModelViewSet[Conversation]):
         workspace_id = self.request.query_params.get("workspaceId")
         if workspace_id:
             queryset = queryset.filter(workspace_id=workspace_id)
-        return (
-            queryset.prefetch_related("participant_links__user", "messages__sender")
-            .distinct()
-        )
+        return queryset.prefetch_related("participant_links__user", "messages__sender").distinct()
 
     def get_serializer_class(self):
         """Trennt die Gesprächserstellung von der Ausgabe."""
@@ -172,9 +169,9 @@ class ConversationViewSet(viewsets.ModelViewSet[Conversation]):
             if any(user.id not in active_ids for user in users):
                 raise ValidationError("Teilnehmende benötigen einen gültigen Team-Kontext.")
             if request.method == "POST":
-                active_links = locked.participant_links.filter(
-                    left_at__isnull=True
-                ).select_related("user")
+                active_links = locked.participant_links.filter(left_at__isnull=True).select_related(
+                    "user"
+                )
                 current_users = [link.user for link in active_links]
                 combined_users = {user.id: user for user in [*current_users, *users]}
                 combined_memberships = list(

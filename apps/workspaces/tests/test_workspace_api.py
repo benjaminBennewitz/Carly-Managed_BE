@@ -300,9 +300,7 @@ def test_project_update_grants_collaborator_visibility() -> None:
     )
 
     assert updated.status_code == 200
-    assert [member["id"] for member in updated.data["collaborators"]] == [
-        str(collaborator.id)
-    ]
+    assert [member["id"] for member in updated.data["collaborators"]] == [str(collaborator.id)]
 
     visible = auth_client(collaborator).get(
         reverse("project-list"), {"workspaceId": str(workspace.id)}
@@ -566,8 +564,7 @@ def test_registered_user_can_accept_in_app_invitation_without_email_verification
     assert personal_board.workspace.owner == invitee
     assert Board.objects.filter(owner=invitee, kind="personal").count() == 1
     assert (
-        Board.objects.filter(workspace=workspace, owner=invitee, kind="personal").exists()
-        is False
+        Board.objects.filter(workspace=workspace, owner=invitee, kind="personal").exists() is False
     )
     personal_task = auth_client(invitee).post(
         reverse("task-list"),
@@ -705,10 +702,10 @@ def test_workspace_visible_project_is_available_to_regular_team_members() -> Non
     projects = auth_client(member).get(reverse("project-list"))
     assert projects.status_code == 200
     project_data = projects.data["results"] if isinstance(projects.data, dict) else projects.data
-    project_item = next(item for item in project_data if item["id"] == created.data["id"] )
+    project_item = next(item for item in project_data if item["id"] == created.data["id"])
     assert project_item["visibility"] == "workspace"
 
-    project = workspace.projects.get(pk=created.data["id"] )
+    project = workspace.projects.get(pk=created.data["id"])
     created_task = auth_client(member).post(
         reverse("task-list"),
         {
@@ -720,9 +717,10 @@ def test_workspace_visible_project_is_available_to_regular_team_members() -> Non
     assert created_task.status_code == 201
 
     owner_personal_board = Board.objects.get(owner=owner, kind="personal")
-    assert auth_client(member).get(
-        reverse("board-detail", args=[owner_personal_board.id])
-    ).status_code == 404
+    assert (
+        auth_client(member).get(reverse("board-detail", args=[owner_personal_board.id])).status_code
+        == 404
+    )
 
 
 def test_project_manager_can_invite_to_project_without_workspace_admin_role() -> None:
@@ -744,7 +742,7 @@ def test_project_manager_can_invite_to_project_without_workspace_admin_role() ->
         format="json",
     )
     assert project_response.status_code == 201
-    project = workspace.projects.get(pk=project_response.data["id"] )
+    project = workspace.projects.get(pk=project_response.data["id"])
     ProjectParticipant.objects.create(project=project, user=manager, role="manager")
 
     manager_client = auth_client(manager)
@@ -1008,9 +1006,11 @@ def test_dynamic_intake_column_must_remain_first() -> None:
     columns = list(board.columns.order_by("position"))
     intake = next(column for column in columns if column.system_role == "new-assigned")
     other = next(column for column in columns if column.id != intake.id)
-    reordered_ids = [other.id, intake.id, *[
-        column.id for column in columns if column.id not in {other.id, intake.id}
-    ]]
+    reordered_ids = [
+        other.id,
+        intake.id,
+        *[column.id for column in columns if column.id not in {other.id, intake.id}],
+    ]
 
     response = auth_client(owner).post(
         reverse("board-reorder-columns", args=[board.id]),
@@ -1046,7 +1046,7 @@ def test_column_with_tasks_can_be_moved_and_deleted_atomically() -> None:
     client = auth_client(owner)
 
     blocked = client.delete(
-        f'{reverse("column-detail", args=[source.id])}?version={source.version}'
+        f"{reverse('column-detail', args=[source.id])}?version={source.version}"
     )
     assert blocked.status_code == 409
 
@@ -1060,9 +1060,7 @@ def test_column_with_tasks_can_be_moved_and_deleted_atomically() -> None:
     assert BoardColumn.objects.filter(pk=source.id).exists() is False
     task.refresh_from_db()
     assert task.column == target
-    positions = list(
-        board.columns.order_by("position").values_list("position", flat=True)
-    )
+    positions = list(board.columns.order_by("position").values_list("position", flat=True))
     assert positions == list(range(len(positions)))
 
 
@@ -1097,7 +1095,7 @@ def test_team_owner_can_create_update_and_delete_additional_team() -> None:
     assert updated.data["allowInvites"] is True
 
     deleted = client.delete(
-        f'{reverse("workspace-detail", args=[team_id])}?version={updated.data["version"]}'
+        f"{reverse('workspace-detail', args=[team_id])}?version={updated.data['version']}"
     )
     assert deleted.status_code == 204
     assert Workspace.objects.filter(pk=team_id).exists() is False

@@ -128,9 +128,7 @@ def _broadcast_board(board_id: Any, event_type: str, payload: dict[str, Any]) ->
     transaction.on_commit(lambda: broadcast_board_event(board_id, event_type, payload))
 
 
-def _reindex_board_columns(
-    board: Board, *, ordered_ids: list[Any] | None = None
-) -> None:
+def _reindex_board_columns(board: Board, *, ordered_ids: list[Any] | None = None) -> None:
     """Verdichtet Spaltenpositionen ohne temporäre Unique-Konflikte."""
     columns = list(board.columns.order_by("position", "created_at", "id"))
     if ordered_ids is not None:
@@ -240,9 +238,9 @@ class WorkspaceViewSet(viewsets.ModelViewSet[Workspace]):
             from apps.realtime.presence import online_user_ids
 
             memberships = list(
-                workspace.memberships.filter(
-                    is_active=True, is_project_guest=False
-                ).select_related("user")
+                workspace.memberships.filter(is_active=True, is_project_guest=False).select_related(
+                    "user"
+                )
             )
             online_ids = online_user_ids(membership.user_id for membership in memberships)
             return Response(
@@ -360,9 +358,7 @@ class ProjectViewSet(viewsets.ModelViewSet[Project]):
                     "Nur der Projektowner kann ein Projekt einem anderen Team zuweisen."
                 )
             target_workspace = (
-                workspaces_for_user(request.user)
-                .filter(pk=requested_workspace_id)
-                .first()
+                workspaces_for_user(request.user).filter(pk=requested_workspace_id).first()
             )
             if target_workspace is None:
                 raise NotFound("Ziel-Team nicht gefunden oder nicht zugänglich.")
@@ -395,13 +391,9 @@ class ProjectViewSet(viewsets.ModelViewSet[Project]):
             locked = Project.objects.select_for_update().get(pk=project.pk)
             assert_version(locked, serializer.validated_data["version"])
             workspace = locked.workspace
-            participant_ids = set(
-                locked.participants.values_list("user_id", flat=True)
-            )
+            participant_ids = set(locked.participants.values_list("user_id", flat=True))
             locked.delete()
-            cleanup_unused_project_guests(
-                workspace=workspace, user_ids=participant_ids
-            )
+            cleanup_unused_project_guests(workspace=workspace, user_ids=participant_ids)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     def _status_action(self, request: Any, value: str) -> Response:
@@ -602,19 +594,16 @@ class BoardColumnViewSet(
                 .filter(column=locked, archived_at__isnull=True)
                 .order_by("position", "created_at")
             )
-            target_position = (
-                Task.objects.filter(column=locked_target, archived_at__isnull=True)
-                .aggregate(value=Max("position"))["value"]
-            )
+            target_position = Task.objects.filter(
+                column=locked_target, archived_at__isnull=True
+            ).aggregate(value=Max("position"))["value"]
             next_position = 0 if target_position is None else target_position + 1
             for offset, task in enumerate(moving):
                 task.column = locked_target
                 task.position = next_position + offset
                 increment_version(task)
             if moving:
-                Task.objects.bulk_update(
-                    moving, ("column", "position", "version", "updated_at")
-                )
+                Task.objects.bulk_update(moving, ("column", "position", "version", "updated_at"))
 
             board = Board.objects.select_for_update().get(pk=locked.board_id)
             deleted_id = str(locked.id)
@@ -795,9 +784,7 @@ class TaskViewSet(viewsets.ModelViewSet[Task]):
             locked.mirrored_tasks.filter(source_subtask__isnull=True).delete()
             locked.delete()
             for mirror_id, mirror_board_id in assignment_mirrors:
-                _broadcast_board(
-                    mirror_board_id, "task.deleted", {"taskId": str(mirror_id)}
-                )
+                _broadcast_board(mirror_board_id, "task.deleted", {"taskId": str(mirror_id)})
             _broadcast_board(board_id, "task.deleted", {"taskId": task_id})
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -1279,9 +1266,7 @@ class InvitationViewSet(
             require_project_manager(user=request.user, project=project)
         else:
             workspace = (
-                workspaces_for_user(request.user)
-                .filter(pk=request.data.get("workspaceId"))
-                .first()
+                workspaces_for_user(request.user).filter(pk=request.data.get("workspaceId")).first()
             )
             if workspace is None:
                 raise NotFound("Workspace nicht gefunden.")

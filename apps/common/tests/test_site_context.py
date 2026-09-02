@@ -16,9 +16,7 @@ from apps.common.site_context import resolve_site_context
     DEFAULT_FROM_EMAIL="Carly Managed <kontakt@b2folio.de>",
     EMAIL_FROM_BY_HOST={
         "cases.b2folio.de": "Carly Managed <kontakt@b2folio.de>",
-        "cases.design-code-repeat.de": (
-            "Carly Managed <kontakt@design-code-repeat.de>"
-        ),
+        "cases.design-code-repeat.de": ("Carly Managed <kontakt@design-code-repeat.de>"),
     },
 )
 class SiteContextTests(SimpleTestCase):

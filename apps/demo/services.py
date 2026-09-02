@@ -845,6 +845,7 @@ def reset_demo_workspace(*, owner: User) -> DemoResetResult:
         notifications=workspace.system_notifications.count(),
     )
 
+
 @transaction.atomic
 def reset_public_demo_account(*, owner: User) -> DemoResetResult:
     """Bereinigt öffentliche Demo-Mutationen und stellt den definierten Ausgangsstand wieder her.
