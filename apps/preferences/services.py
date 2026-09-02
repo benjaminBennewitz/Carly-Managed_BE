@@ -237,7 +237,7 @@ def perform_carly_action(
         carly.last_message = f"{food_rule['label']} gekauft. Vorrat: {inventory[food]}."
         carly.version += 1
         carly.save()
-        setattr(carly, "_special_effect", "purchase")
+        carly._special_effect = "purchase"
         return carly
 
     rule = ACTION_RULES.get(action)
@@ -300,7 +300,7 @@ def perform_carly_action(
                 seconds=int(food_rule["bonusDurationSeconds"])
             )
         special_effect = str(food_rule["effect"])
-        carly.last_message = f"{food_rule['label']} – eine akzeptable Wahl."
+        carly.last_message = f"{food_rule['label']} - eine akzeptable Wahl."
     else:
         carly.affection = max(0, min(100, carly.affection + rule["affection"]))
         carly.energy = max(0, min(100, carly.energy + rule["energy"]))
@@ -327,8 +327,8 @@ def perform_carly_action(
         action_log.save(update_fields=("points", "updated_at"))
 
     synchronize_level(carly)
-    setattr(carly, "_reward_result", reward_result)
-    setattr(carly, "_special_effect", special_effect)
+    carly._reward_result = reward_result
+    carly._special_effect = special_effect
     return carly
 
 
@@ -346,5 +346,5 @@ def reward_productivity(*, user: User, points: int, message: str) -> CarlyState:
         message=message,
     )
     carly = CarlyState.objects.get(user=user)
-    setattr(carly, "_reward_result", result)
+    carly._reward_result = result
     return carly

@@ -10,17 +10,17 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.preferences.models import CarlyRewardLog, UserSettings
+from apps.preferences.rewards import (
+    daily_reward_summary,
+    get_reward_rules_payload,
+    serialize_reward_log,
+)
 from apps.preferences.serializers import (
     AppSettingsSerializer,
     AppSettingsWriteSerializer,
     CarlyActionSerializer,
     CarlySettingsWriteSerializer,
     CarlyStateSerializer,
-)
-from apps.preferences.rewards import (
-    daily_reward_summary,
-    get_reward_rules_payload,
-    serialize_reward_log,
 )
 from apps.preferences.services import (
     bootstrap_preferences,

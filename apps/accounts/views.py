@@ -176,8 +176,6 @@ class PasswordChangeView(APIView):
         serializer = PasswordChangeSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         if not request.user.check_password(serializer.validated_data["currentPassword"]):
-            from rest_framework.exceptions import AuthenticationFailed, PermissionDenied, ValidationError
-
             raise ValidationError(
                 {"currentPassword": ["Das aktuelle Passwort ist nicht korrekt."]},
                 code="invalid_current_password",

@@ -853,7 +853,6 @@ def reset_public_demo_account(*, owner: User) -> DemoResetResult:
     angelegten Team-Workspaces, Projekte und persönlichen Tasks des Demo-Kontos werden entfernt,
     bevor die deterministischen Demo-Daten neu erzeugt werden.
     """
-    from apps.workspaces.choices import BoardKind
     from apps.workspaces.models import Project, Task
     from apps.workspaces.services import ensure_personal_board
 

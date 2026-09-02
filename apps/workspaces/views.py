@@ -28,11 +28,13 @@ from apps.common.throttles import (
 )
 from apps.common.validators import validate_upload
 from apps.preferences.rewards import award_carly_reward_safely
-from apps.workspaces.choices import BoardKind
-from apps.workspaces.choices import InvitationStatus
-from apps.workspaces.choices import ProjectRole
-from apps.workspaces.choices import ProjectStatus
-from apps.workspaces.choices import WorkspaceRole
+from apps.workspaces.choices import (
+    BoardKind,
+    InvitationStatus,
+    ProjectRole,
+    ProjectStatus,
+    WorkspaceRole,
+)
 from apps.workspaces.models import (
     AutomationRule,
     Board,
@@ -95,13 +97,13 @@ from apps.workspaces.services import (
     accept_invitation_by_id,
     archive_task,
     assert_version,
-    create_invitation,
-    cleanup_unused_project_guests,
     claim_pool_task,
+    cleanup_unused_project_guests,
+    create_invitation,
     create_project,
-    ensure_personal_board,
     create_subtask,
     create_task,
+    ensure_personal_board,
     increment_version,
     move_task,
     reject_invitation_by_id,
