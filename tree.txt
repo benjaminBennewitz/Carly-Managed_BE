@@ -145,6 +145,7 @@ Carly-Managed_BE/
 ├── scripts/
 │   ├── deploy-carly-backend-local.cmd
 │   └── deploy-carly-backend-server.sh
+├── .coverage
 ├── .editorconfig
 ├── .env.local
 ├── .env.prod

@@ -19,7 +19,7 @@ WORKER_SERVICE="carly-managed-worker.service"
 BEAT_SERVICE="carly-managed-beat.service"
 
 HEALTH_URL="http://127.0.0.1:8201/api/v1/health/"
-HEALTH_HOST="cases.b2folio.de"
+HEALTH_HOST="carly-managed-demo.b2folio.de"
 
 PREVIOUS_RELEASE=""
 

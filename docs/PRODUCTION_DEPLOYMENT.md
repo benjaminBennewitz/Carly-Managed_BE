@@ -3,12 +3,12 @@
 
 ## Zielarchitektur
 
-Ein Angular-Build wird einmal erzeugt und unverändert in zwei getrennte KeyHelp-Webroots verteilt:
+Ein Angular-Build wird einmal erzeugt und unverändert in zwei getrennte, projektisolierte KeyHelp-Webroots verteilt:
 
-- `https://cases.b2folio.de`
-- `https://cases.design-code-repeat.de`
+- `https://carly-managed-demo.b2folio.de`
+- `https://carly-managed-demo.design-code-repeat.de`
 
-Beide Hosts verwenden Same-Origin-Routen und proxien `/api/` sowie `/ws/` auf denselben projektisolierten Daphne-Dienst. Es gibt keinen Redirect zwischen den Domains. Sitzungs- und CSRF-Cookies bleiben hostgebunden.
+Beide Carly-Hosts verwenden Same-Origin-Routen und proxien `/api/` sowie `/ws/` auf denselben projektisolierten Daphne-Dienst. Es gibt keinen Redirect zwischen den Domains. Sitzungs- und CSRF-Cookies bleiben hostgebunden.
 
 Das Backend läuft getrennt von anderen Projekten unter `/srv/carly-managed/`. Eine zentrale PostgreSQL-Instanz darf mehrere Projekte versorgen, aber Carly erhält eine eigene Datenbank und einen eigenen DB-Login. Redis wird ebenfalls geteilt, Carly nutzt jedoch einen eigenen ACL-Benutzer und die logischen Datenbanken 10, 11 und 12.
 
@@ -33,7 +33,7 @@ Django 5.2 verwendet `STORAGES` mit `CompressedManifestStaticFilesStorage`. Vor 
 
 ```bash
 DJANGO_ENV=production CARLY_ENV_FILE=/etc/carly-managed.env \
-  /srv/carly-managed/.venv/bin/python manage.py collectstatic --noinput --clear
+  /srv/carly-managed/.venv/bin/python manage.py collectstatic --noinput
 ```
 
 Danach muss `staticfiles.json` unter `/srv/carly-managed/shared/static/` existieren. `collectstatic` wird als Deployment-Schritt ausgeführt und nicht beim Start jedes Workers.
@@ -56,7 +56,7 @@ Die versionierten Units liegen unter `deploy/systemd/`:
 - `carly-managed-worker.service`
 - `carly-managed-beat.service`
 
-Sie verwenden den dedizierten Systembenutzer `carly-managed`, den stabilen Symlink
+Sie verwenden den dedizierten Systembenutzer `carly`, den stabilen Symlink
 `/srv/carly-managed/current` und schreiben ausschließlich in `/srv/carly-managed/shared/`.
 Vor der Aktivierung werden sie nach `/etc/systemd/system/` kopiert und anschließend mit
 `systemctl daemon-reload` eingelesen.
@@ -72,14 +72,16 @@ Für beide HTTPS-Hosts gelten dieselben Proxyregeln:
 ```apache
 ProxyPreserveHost On
 
-ProxyPass /api/ http://127.0.0.1:8201/api/
+ProxyPass /api/ http://127.0.0.1:8201/api/ retry=0
 ProxyPassReverse /api/ http://127.0.0.1:8201/api/
 
-ProxyPass /ws/ ws://127.0.0.1:8201/ws/
+ProxyPass /ws/ ws://127.0.0.1:8201/ws/ retry=0
 ProxyPassReverse /ws/ ws://127.0.0.1:8201/ws/
 
-RequestHeader set X-Forwarded-Proto "https"
-RequestHeader set X-Forwarded-Port "443"
+<If "%{HTTPS} == 'on'">
+    RequestHeader set X-Forwarded-Proto "https"
+    RequestHeader set X-Forwarded-Port "443"
+</If>
 ```
 
 Der Frontend-Build besitzt zusätzlich einen Angular-SPA-Fallback in `.htaccess`. `/api` und `/ws` werden davon ausdrücklich ausgeschlossen.

@@ -98,15 +98,15 @@ def test_registration_bootstraps_complete_personal_context() -> None:
 
 
 @override_settings(
-    ALLOWED_HOSTS=["cases.b2folio.de", "cases.design-code-repeat.de"],
-    FRONTEND_URL="https://cases.b2folio.de",
+    ALLOWED_HOSTS=["carly-managed-demo.b2folio.de", "carly-managed-demo.design-code-repeat.de"],
+    FRONTEND_URL="https://carly-managed-demo.b2folio.de",
     FRONTEND_URLS=[
-        "https://cases.b2folio.de",
-        "https://cases.design-code-repeat.de",
+        "https://carly-managed-demo.b2folio.de",
+        "https://carly-managed-demo.design-code-repeat.de",
     ],
     EMAIL_FROM_BY_HOST={
-        "cases.b2folio.de": "Carly Managed <kontakt@b2folio.de>",
-        "cases.design-code-repeat.de": ("Carly Managed <kontakt@design-code-repeat.de>"),
+        "carly-managed-demo.b2folio.de": "Carly Managed <kontakt@b2folio.de>",
+        "carly-managed-demo.design-code-repeat.de": ("Carly Managed <kontakt@design-code-repeat.de>"),
     },
 )
 def test_registration_email_keeps_request_host_identity() -> None:
@@ -115,7 +115,7 @@ def test_registration_email_keeps_request_host_identity() -> None:
     csrf_response = client.get(
         reverse("csrf"),
         secure=True,
-        HTTP_HOST="cases.design-code-repeat.de",
+        HTTP_HOST="carly-managed-demo.design-code-repeat.de",
     )
     assert csrf_response.status_code == 200
 
@@ -129,16 +129,16 @@ def test_registration_email_keeps_request_host_identity() -> None:
         },
         format="json",
         secure=True,
-        HTTP_HOST="cases.design-code-repeat.de",
-        HTTP_REFERER="https://cases.design-code-repeat.de/",
+        HTTP_HOST="carly-managed-demo.design-code-repeat.de",
+        HTTP_REFERER="https://carly-managed-demo.design-code-repeat.de/",
         HTTP_X_CSRFTOKEN=csrf_response.data["csrfToken"],
     )
 
     assert response.status_code == 201
     assert len(mail.outbox) == 1
     assert mail.outbox[0].from_email == "Carly Managed <kontakt@design-code-repeat.de>"
-    assert "https://cases.design-code-repeat.de/auth/verify-email#token=" in mail.outbox[0].body
-    assert "cases.b2folio.de" not in mail.outbox[0].body
+    assert "https://carly-managed-demo.design-code-repeat.de/auth/verify-email#token=" in mail.outbox[0].body
+    assert "carly-managed-demo.b2folio.de" not in mail.outbox[0].body
 
 
 def test_registration_rejects_missing_privacy_acknowledgement() -> None:

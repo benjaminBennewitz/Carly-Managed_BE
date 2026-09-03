@@ -1,13 +1,15 @@
 # deploy/apache/carly-managed-proxy.conf.example
-# In die benutzerdefinierten HTTPS-Anweisungen BEIDER Case-Study-Domains eintragen.
+# In die benutzerdefinierten HTTPS-Anweisungen BEIDER Carly-Demo-Domains eintragen.
 
 ProxyPreserveHost On
 
-ProxyPass /api/ http://127.0.0.1:8201/api/
+ProxyPass /api/ http://127.0.0.1:8201/api/ retry=0
 ProxyPassReverse /api/ http://127.0.0.1:8201/api/
 
-ProxyPass /ws/ ws://127.0.0.1:8201/ws/
+ProxyPass /ws/ ws://127.0.0.1:8201/ws/ retry=0
 ProxyPassReverse /ws/ ws://127.0.0.1:8201/ws/
 
-RequestHeader set X-Forwarded-Proto "https"
-RequestHeader set X-Forwarded-Port "443"
+<If "%{HTTPS} == 'on'">
+    RequestHeader set X-Forwarded-Proto "https"
+    RequestHeader set X-Forwarded-Port "443"
+</If>
