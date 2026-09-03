@@ -106,7 +106,9 @@ def test_registration_bootstraps_complete_personal_context() -> None:
     ],
     EMAIL_FROM_BY_HOST={
         "carly-managed-demo.b2folio.de": "Carly Managed <kontakt@b2folio.de>",
-        "carly-managed-demo.design-code-repeat.de": ("Carly Managed <kontakt@design-code-repeat.de>"),
+        "carly-managed-demo.design-code-repeat.de": (
+            "Carly Managed <kontakt@design-code-repeat.de>"
+        ),
     },
 )
 def test_registration_email_keeps_request_host_identity() -> None:
@@ -137,7 +139,11 @@ def test_registration_email_keeps_request_host_identity() -> None:
     assert response.status_code == 201
     assert len(mail.outbox) == 1
     assert mail.outbox[0].from_email == "Carly Managed <kontakt@design-code-repeat.de>"
-    assert "https://carly-managed-demo.design-code-repeat.de/auth/verify-email#token=" in mail.outbox[0].body
+    verification_url = (
+        "https://carly-managed-demo.design-code-repeat.de/"
+        "auth/verify-email#token="
+    )
+    assert verification_url in mail.outbox[0].body
     assert "carly-managed-demo.b2folio.de" not in mail.outbox[0].body
 
 
